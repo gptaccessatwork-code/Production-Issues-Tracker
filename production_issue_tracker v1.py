@@ -13,7 +13,6 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from PIL import Image, ImageFont
 from pilmoji import Pilmoji
-import tksheet
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -77,7 +76,6 @@ WIN_MIN   = (1000, 620)  # minimum width, height
 # --- Table columns -----------------------------------------------------------
 #  Each tuple: (column_id, header_label, pixel_width, word_wrap?)
 #  Reorder, resize, or hide columns by editing this list.
-#  NOTE: Row numbers are handled by tksheet's built-in row index (left margin)
 TABLE_COLS = [
     ("date",     "Date",             125, False),
     ("system",   "System No.",       230, True ),
@@ -1024,10 +1022,6 @@ class App(ctk.CTk):
              color="#a02020", width=148, radius=8).pack(side="left")
         self._sel_lbl = _lbl(bar, "", size=F["size_sm"], color=C["subtle"])
         self._sel_lbl.pack(side="left", padx=10)
-        
-        # Status label for copy feedback
-        self._status_lbl = _lbl(bar, "", size=F["size_sm"], color=C["accent"])
-        self._status_lbl.pack(side="left", padx=10)
 
         # ── Search bar (right side of toolbar) ────────────────────────────────
         _lbl(bar, "Hold Ctrl / Shift to select multiple rows",
@@ -1067,181 +1061,68 @@ class App(ctk.CTk):
         outer = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=10)
         outer.pack(fill="both", expand=True, padx=14, pady=8)
 
-        # Extract column headers and widths
+        s = ttk.Style(); s.theme_use("clam")
+        s.configure("T.Treeview",
+                    background=C["surface"], foreground=C["text"], rowheight=28,
+                    fieldbackground=C["surface"], font=(F["family"], F["size_sm"]),
+                    borderwidth=0)
+        s.configure("T.Treeview.Heading",
+                    background=C["header"], foreground="white",
+                    font=(F["family"], F["size_sm"], "bold"), relief="flat")
+        # All rows: black text, selected row gets a blue bg — no per-status foreground
+        s.map("T.Treeview",
+              background=[("selected", C["sel"])],
+              foreground=[("selected", C["text"])])
+        for style in ("Slim.Vertical.TScrollbar", "Slim.Horizontal.TScrollbar"):
+            s.configure(style, background=C["panel"], troughcolor=C["surface"],
+                        borderwidth=0, arrowsize=11, width=9)
+        s.map("Slim.Vertical.TScrollbar", background=[("active", C["accent"])])
+
+        col_ids  = [c[0] for c in TABLE_COLS]
         col_hdrs = [c[1] for c in TABLE_COLS]
         col_wids = [c[2] for c in TABLE_COLS]
-        self._col_hdrs = {c[0]: c[1] for c in TABLE_COLS}  # id → header text
-        self._col_ids = [c[0] for c in TABLE_COLS]
         self._wrap_cols = {c[0] for c in TABLE_COLS if c[3]}
-        
-        # Create tksheet.Sheet widget with professional styling
-        self.sheet = tksheet.Sheet(
-            outer,
-            data=[],  # Start with empty data (headers handled separately)
-            column_width=150,  # Default column width
-            height=400,
-            width=800,
-            theme="light",
-            empty_horizontal=0,  # Remove extra horizontal padding
-            empty_vertical=0,    # Remove extra vertical padding
-            header_align="center",  # Center-align headers by default
-            align="center"  # Center-align cells by default
-        )
-        
-        # Set proper column names (not numbers)
-        self.sheet.headers(col_hdrs)
-        
-        # Enable comprehensive bindings for professional spreadsheet feel
-        self.sheet.enable_bindings((
-            "copy",
-            "select",
-            "drag_select",
-            "single_select",
-            "multi_select",
-            "row_select",
-            "column_select",
-            "ctrl_click_select",
-            "shift_click_select",
-            "column_width_resize",
-            "row_height_resize",
-            "double_click_column_resize"
-        ))
-        
-        # Bind double-click to open issue
-        self.sheet.extra_bindings([("double_click_table", self._on_double_click)])
-        
-        # Configure row index (left margin)
-        self.sheet.row_index_width = 50
-        self.sheet.show_row_index = True
-        
-        # Set column widths from TABLE_COLS
-        for col_idx, (col_id, header, width, _) in enumerate(TABLE_COLS):
-            self.sheet.column_width(col_idx, width=width)
-        
-        # Configure alignment for text-heavy columns (constructor already sets center-align default)
-        # Set left alignment for text-heavy columns using column index list
-        left_align_indices = []
-        for col_idx, (col_id, _, _, _) in enumerate(TABLE_COLS):
-            if col_id in ("desc", "solution", "remarks"):
-                left_align_indices.append(col_idx)
-        
-        # Apply left alignment to these specific columns
-        for col_idx in left_align_indices:
-            self.sheet.align_columns(columns=col_idx, align='w')
-        
-        # Configure fonts and sizes
-        self.sheet.font = (F["family"], F["size_md"])
-        self.sheet.header_font = (F["family"], 11, "bold")
-        
-        # Apply comprehensive professional styling via set_options
-        self.sheet.set_options(
-            header_height=26,
-            header_bg=C["header"],
-            header_fg="white",
-            table_bg=C["surface"],
-            table_fg=C["text"],
-            index_bg=C["panel"],
-            index_fg=C["text"],
-            grid_color=C["border"]
-        )
-        
-        # Bind click events for copy feedback
-        self.sheet.bind("<Button-1>", self._on_sheet_click, add="+")
-        self.sheet.bind("<Button-3>", self._on_sheet_right_click, add="+")
-        
-        self.sheet.pack(fill="both", expand=True, padx=6, pady=6)
-        
-        # Store state for tracking selected rows
-        self._selected_rows = set()
-        self._sort_col = None
-        self._sort_reverse = False
-        self._flashing_cells = {}
-    
-    def _on_double_click(self, event=None):
-        """Handle double-click to open issue for editing."""
-        try:
-            if event:
-                # Extract row index from event tuple
-                row = event[0] if isinstance(event, (list, tuple)) and len(event) > 0 else None
-                if row and row > 0 and row in self._id_map:
-                    db_id = self._id_map[row]
-                    dlg = ManageDialog(self, db_id)
-                    self.wait_window(dlg)
-                    self._refresh()
-                    return
-        except Exception:
-            pass
-    
-    def _on_sheet_click(self, event=None):
-        """Handle sheet clicks: copy to clipboard and flash effect (respects Ctrl/Shift for multi-select)."""
-        if not event or self.sheet.identify_region(event) != "body":
-            return
-        
-        # Get the clicked cell/row
-        row = self.sheet.identify_row(event, return_val="data")
-        col = self.sheet.identify_column(event, return_val="data")
-        
-        if row is None or col is None or row == 0:  # Skip header row
-            return
-        
-        # Check if Ctrl or Shift is pressed (for multi-select support)
-        has_modifier = (event.state & 0x0004) or (event.state & 0x0001)  # Ctrl or Shift
-        
-        # Only perform copy/flash if this is a single click (no modifiers)
-        if not has_modifier:
-            try:
-                cell_value = self.sheet.get_cell_value(row, col)
-                if cell_value:
-                    # Copy to clipboard
-                    self.clipboard_clear()
-                    self.clipboard_append(str(cell_value))
-                    self._show_copy_feedback(str(cell_value))
-                
-                # Flash the cell
-                self._flash_cell_tksheet(row, col)
-            except Exception:
-                pass
-    
-    def _on_sheet_right_click(self, event=None):
-        """Handle right-click for context menu (optional)."""
-        pass
-    
-    def _flash_cell_tksheet(self, row, col):
-        """Display a brief flash (250ms) over the clicked cell."""
-        try:
-            # Highlight cell with accent color using cells parameter
-            self.sheet.highlight_cells(cells=[(row, col)], bg=C["accent"], fg="white", overwrite=False)
-            
-            # Store for later clearing
-            self._flashing_cells[(row, col)] = True
-            
-            # Clear highlight after 250ms
-            def clear_highlight():
-                try:
-                    self.sheet.dehighlight_cells(cells=[(row, col)])
-                    if (row, col) in self._flashing_cells:
-                        del self._flashing_cells[(row, col)]
-                except Exception:
-                    pass
-            
-            self.after(250, clear_highlight)
-        except Exception:
-            pass
+        self._col_hdrs  = dict(zip(col_ids, col_hdrs))  # id → base header text
+        self._char_px   = 8  # approx pixels per char (Montserrat is wider than Segoe UI)
 
-    def _show_copy_feedback(self, text):
-        """Display a brief 'Copied' message in the status label and auto-hide it."""
-        # Truncate very long text for display
-        display_text = text[:50] + "..." if len(text) > 50 else text
-        self._status_lbl.configure(text=f"✓ Copied: {display_text}")
-        
-        # Auto-clear the status after 2 seconds
-        if hasattr(self, "_status_after_id"):
-            self.after_cancel(self._status_after_id)
-        self._status_after_id = self.after(2000, lambda: self._status_lbl.configure(text=""))
+        self.tree = ttk.Treeview(outer, columns=col_ids, show="headings",
+                                  selectmode="extended", style="T.Treeview")
+        for cid, hdr, w in zip(col_ids, col_hdrs, col_wids):
+            self.tree.heading(cid, text=hdr, command=lambda c=cid: self._sort(c))
+            anchor = "w" if cid in {"desc", "solution", "remarks"} else "center"
+            self.tree.column(cid, width=w, anchor=anchor, minwidth=50, stretch=False)
+
+        # Row tags: alternating stripe and status foreground colors
+        self.tree.tag_configure("alt", background=C["stripe"])
+        self.tree.tag_configure("Open", foreground=C["open"])
+        self.tree.tag_configure("Clarification", foreground=C["clarif"])
+        self.tree.tag_configure("Closed", foreground=C["closed"])
+
+        vsb = ttk.Scrollbar(outer, orient="vertical",   command=self.tree.yview,
+                            style="Slim.Vertical.TScrollbar")
+        hsb = ttk.Scrollbar(outer, orient="horizontal", command=self.tree.xview,
+                            style="Slim.Horizontal.TScrollbar")
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew", padx=(6, 0), pady=6)
+        vsb.grid(row=0, column=1, sticky="ns",  pady=6,      padx=(0, 4))
+        hsb.grid(row=1, column=0, sticky="ew",  padx=(6, 0), pady=(0, 4))
+        outer.grid_rowconfigure(0, weight=1)
+        outer.grid_columnconfigure(0, weight=1)
+
+        self.tree.bind("<Double-1>",         self._open_issue)
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        self.tree.bind("<ButtonRelease-1>",  lambda _: self.after(10, self._apply_wrap))
+        self.tree.bind("<Shift-MouseWheel>", self._on_horizontal_scroll)
+        self.winfo_toplevel().bind("<Button-1>", self._deselect_if_outside, add="+")
+        self._sort_col = None
+        self._sort_rev = False
+    
+    def _on_horizontal_scroll(self, event):
+        self.tree.xview_scroll(int(-1*(event.delta/120))*50, "units")
 
     # ── Search ────────────────────────────────────────────────────────────────
     def _search_apply(self, *_):
-        """Filter rows by search query and refresh table."""
+        """Filter the visible rows to those matching the current search query."""
         query = self._search_var.get().strip().lower()
 
         # Show/hide the clear button
@@ -1251,42 +1132,113 @@ class App(ctk.CTk):
         else:
             self._search_clear_btn.pack_forget()
 
-        # Refresh to apply filters
-        self._refresh()
-        
+        if not query:
+            # No query — restore all rows in original order
+            for iid in list(self.tree.get_children()):
+                self.tree.detach(iid)
+            for iid in self._id_map:
+                self.tree.reattach(iid, "", "end")
+            self._search_match_lbl.configure(text="")
+            self._apply_wrap()
+            return
+
+        # Split into tokens so "BOM FEP" matches rows containing both words
+        tokens = query.split()
+        matches = []
+        hidden  = []
+
+        for iid, raw in self._raw_text.items():
+            haystack = " ".join(str(v) for v in raw.values()).lower()
+            if all(t in haystack for t in tokens):
+                matches.append(iid)
+            else:
+                hidden.append(iid)
+
+        # Detach non-matching rows, reattach matching ones
+        for iid in hidden:
+            self.tree.detach(iid)
+        for iid in matches:
+            self.tree.reattach(iid, "", "end")
+
         # Update match counter
-        n = len(self._raw_text)
+        n = len(matches)
         self._search_match_lbl.configure(
             text=f"{n} match{'es' if n != 1 else ''}" if n else "No matches",
             text_color=C["subtle"] if n else C["open"])
+
+        self._apply_wrap()
 
     def _search_clear(self):
         """Clear the search query and restore all rows."""
         self._search_var.set("")
         self._search_entry.focus_set()
 
+    # ── Word-wrap & dynamic row height ────────────────────────────────────────
+    def _wrap_text(self, text, col_id):
+        """Wrap text at word boundaries to fit the current column pixel width."""
+        if not text:
+            return ""
+        # Subtract a small gutter (6px each side) so text doesn't butt against the edge
+        usable_px = max(1, self.tree.column(col_id, "width") - 12)
+        max_chars  = max(6, usable_px // self._char_px)
+        lines, current, length = [], [], 0
+        for word in text.split():
+            extra = 1 if current else 0
+            if length + extra + len(word) <= max_chars:
+                current.append(word); length += extra + len(word)
+            else:
+                if current: lines.append(" ".join(current))
+                current, length = [word], len(word)
+        if current: lines.append(" ".join(current))
+        return "\n".join(lines)
+
+    def _apply_wrap(self):
+        """Re-wrap all wrap-column text and set rowheight to fit the tallest wrapped cell."""
+        col_ids    = self.tree["columns"]
+        line_h     = F["size_sm"] + 8   # px per line including leading (generous for Montserrat)
+        pad_v      = 10                  # total vertical cell padding
+        min_height = 32
+        max_height = min_height
+
+        for iid in self.tree.get_children():
+            raw       = self._raw_text.get(iid, {})
+            new_vals  = []
+            row_lines = 1
+            for c in col_ids:
+                if c in self._wrap_cols:
+                    wrapped = self._wrap_text(raw.get(c, ""), c)
+                    new_vals.append(wrapped)
+                    row_lines = max(row_lines, wrapped.count("\n") + 1)
+                else:
+                    new_vals.append(raw.get(c, ""))
+            self.tree.item(iid, values=new_vals)
+            max_height = max(max_height, row_lines * line_h + pad_v)
+
+        ttk.Style().configure("T.Treeview", rowheight=max_height)
+
     # ── Data ──────────────────────────────────────────────────────────────────
     def _refresh(self, *_):
         self._id_map.clear()
         self._raw_text.clear()
-        self._selected_rows.clear()
-        
+        for item in self.tree.get_children():
+            self.tree.delete(item)
         # Clear search and sort state on a full refresh
         self._search_var.set("")
         self._search_match_lbl.configure(text="")
-        # Clear sort state
+        # Clear sort arrows
         self._sort_col = None
-        self._sort_reverse = False
+        self._sort_rev = False
+        for cid, lbl in self._col_hdrs.items():
+            self.tree.heading(cid, text=lbl)
 
-        col_ids = self._col_ids
-        rows = fetch_issues(self._fs.get(), self._ff.get(),
-                           self._fi.get(), self._fm.get(), self._fy.get())
-        
-        # Build 2D array for tksheet: data rows only (headers handled by self.sheet.headers())
-        table_data = []
-        
-        for row_num, row in enumerate(rows, start=1):
+        col_ids = self.tree["columns"]
+        rows    = fetch_issues(self._fs.get(), self._ff.get(),
+                               self._fi.get(), self._fm.get(), self._fy.get())
+        for i, row in enumerate(rows):
             status = row["status"]
+            
+            # Combine the stripe tag (if applicable) with the status tag
+            tags = ("alt", status) if i % 2 else (status,)
             
             raw = {
                 "date"    : _fmt_date(row["date_reported"]),
@@ -1304,124 +1256,78 @@ class App(ctk.CTk):
                 "scv"     : row["scv"],
                 "remarks" : row["remarks"]          or "",
             }
-            
-            # Build row data in column order (# column removed from TABLE_COLS)
-            row_data = [raw.get(c, "") for c in col_ids]
-            table_data.append(row_data)
-            
-            # Map tksheet row index (1-based) to database ID
-            self._id_map[row_num] = row["id"]
-            self._raw_text[row_num] = raw
-        
-        # Update sheet with new data (no header row in data)
-        self.sheet.set_sheet_data(table_data, reset_col_positions=False)
-        
-        # Re-apply column widths from TABLE_COLS
-        for col_idx, (col_id, header, width, _) in enumerate(TABLE_COLS):
-            self.sheet.column_width(col_idx, width=width)
-        
-        # Set left alignment for text-heavy columns after data is loaded (constructor set center-align default)
-        left_align_indices = []
-        for col_idx, (col_id, _, _, _) in enumerate(TABLE_COLS):
-            if col_id in ("desc", "solution", "remarks"):
-                left_align_indices.append(col_idx)
-        
-        for col_idx in left_align_indices:
-            self.sheet.align_columns(columns=col_idx, align='w')
-        
-        # Update statistics
+            iid = self.tree.insert("", "end",
+                values=tuple(raw.get(c, "") for c in col_ids),
+                tags=tags)
+            self._id_map[iid]   = row["id"]
+            self._raw_text[iid] = raw
+
+        self._apply_wrap()
         t, o, cl, cf = get_counts()
         self._v_total.set(f"Total: {t}")
         self._v_open.set(f"Open: {o}")
         self._v_clarif.set(f"Clarification: {cf}")
         self._v_closed.set(f"Closed: {cl}")
         self._sel_lbl.configure(text="")
-        
-        # Auto-size rows for wrapping text (CRUCIAL: at very end of refresh)
-        try:
-            self.sheet.set_all_row_heights_to_auto(redraw=True)
-        except Exception:
-            # Fallback if auto-height fails
-            pass
 
     def _reset_filters(self):
         for v in [self._fs, self._ff, self._fi, self._fm, self._fy]:
             v.set("All")
 
-    def _sort_by_column(self, col_idx):
-        """Sort by column (preserves row numbers #)."""
-        if self._sort_col == col_idx:
-            self._sort_reverse = not self._sort_reverse
-        else:
-            self._sort_col = col_idx
-            self._sort_reverse = False
-        
-        # Re-fetch and re-sort the data
-        self._refresh()
+    def _sort(self, col):
+        items = [(self._raw_text.get(k, {}).get(col, ""), k)
+                 for k in self.tree.get_children()]
+        # Toggle direction if same col clicked again, else start ascending
+        rev = (not self._sort_rev) if self._sort_col == col else False
+        items.sort(reverse=rev, key=lambda x: x[0])
+        for idx, (_, k) in enumerate(items):
+            self.tree.move(k, "", idx)
+        self._sort_col = col
+        self._sort_rev = rev
+        # Update all headings: show arrow only on active column
+        for cid, base_lbl in self._col_hdrs.items():
+            if cid == col:
+                arrow = " ▼" if rev else " ▲"
+                self.tree.heading(cid, text=base_lbl + arrow)
+            else:
+                self.tree.heading(cid, text=self._col_hdrs[cid])
 
     def _on_select(self, _):
-        """Handle row selection (handled by click binding)."""
-        pass
+        n = len(self.tree.selection())
+        self._sel_lbl.configure(
+            text=f"{n} row{'s' if n != 1 else ''} selected" if n else "")
 
     def _deselect_if_outside(self, event):
-        """Deselect if click is outside the sheet."""
-        pass
+        try:
+            w = event.widget
+            while w is not None:
+                if w is self.tree: return
+                w = w.master
+        except Exception:
+            pass
+        self.tree.selection_set([])
 
     # ── Actions ───────────────────────────────────────────────────────────────
     def _new_issue(self):
         dlg = NewIssueDialog(self)
         self.wait_window(dlg); self._refresh()
 
-    def _open_issue(self, event=None):
-        """Open the first selected row's issue details or from double-click."""
-        try:
-            # If called from double-click event, extract row index
-            if event and hasattr(event, "data"):
-                row = event.data[0] if isinstance(event.data, (list, tuple)) else event.data
-                if row and row > 0 and row in self._id_map:
-                    db_id = self._id_map[row]
-                    dlg = ManageDialog(self, db_id)
-                    self.wait_window(dlg)
-                    self._refresh()
-                    return
-        except Exception:
-            pass
-        
-        # Fallback: open first selected row or first row in table
-        if self._selected_rows:
-            row_idx = min(self._selected_rows)
-            if row_idx in self._id_map:
-                db_id = self._id_map[row_idx]
-                dlg = ManageDialog(self, db_id)
-                self.wait_window(dlg); self._refresh()
-        elif self._id_map:
-            # If no explicit selection, open the first row
-            first_row = min(self._id_map.keys())
-            db_id = self._id_map[first_row]
-            dlg = ManageDialog(self, db_id)
-            self.wait_window(dlg); self._refresh()
+    def _open_issue(self, _):
+        sel = self.tree.selection()
+        if not sel: return
+        dlg = ManageDialog(self, self._id_map[sel[0]])
+        self.wait_window(dlg); self._refresh()
 
     def _mass_delete(self):
-        """Delete all selected rows."""
-        if not self._selected_rows:
-            messagebox.showwarning("No Selection",
-                                   "Please select at least one row using Ctrl+click or Shift+click.",
-                                   parent=self)
-            return
-        
-        if not messagebox.askyesno("Confirm Delete",
-                                   f"Delete {len(self._selected_rows)} issue(s)? This cannot be undone.",
-                                   parent=self):
-            return
-        
-        # Get the database IDs for selected rows
-        ids_to_delete = [self._id_map[row_idx] for row_idx in self._selected_rows 
-                         if row_idx in self._id_map]
-        
-        if ids_to_delete:
-            delete_by_ids(ids_to_delete)
-            messagebox.showinfo("Deleted", f"Deleted {len(ids_to_delete)} issue(s).", parent=self)
-            self._refresh()
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("No Selection", "Select rows to delete first.",
+                                parent=self); return
+        ids = [self._id_map[s] for s in sel]
+        if messagebox.askyesno("Confirm Delete",
+                               f"Permanently delete {len(ids)} issue(s)?\n"
+                               "This cannot be undone.", parent=self):
+            delete_by_ids(ids); self._refresh()
 
     def _export(self):
         rows = fetch_issues(self._fs.get(), self._ff.get(),
