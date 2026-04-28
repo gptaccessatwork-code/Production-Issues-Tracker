@@ -6,12 +6,12 @@ Requires: pip install customtkinter openpyxl pillow
 import customtkinter as ctk
 import tkinter as tk
 import sys
-from tkinter import ttk, messagebox, filedialog
+from tkinter import messagebox, filedialog
 import sqlite3, os, datetime, calendar
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from PIL import Image, ImageFont
+from PIL import Image
 from pilmoji import Pilmoji
 
 
@@ -102,11 +102,8 @@ ISSUE_TYPES = ["BOM Error", "Document Discrepancy", "Document Error",
 if getattr(sys, 'frozen', False):
     # If running as an .exe
     _HERE = os.path.dirname(sys.executable)
-    _BUNDLE = sys._MEIPASS # Internal path for bundled files like logo.png
 else:
-    # If running as a normal .py script
     _HERE = os.path.dirname(os.path.abspath(__file__))
-    _BUNDLE = _HERE
 
 DB_PATH   = os.path.join(_HERE, "production_issues.db")
 LOGO_PATH = os.path.join(_HERE, "logo.png")
@@ -114,7 +111,6 @@ LOGO_PATH = os.path.join(_HERE, "logo.png")
 # --- Derived filter lists (don't edit) ---------------------------------------
 MONTH_NAMES = ["All"] + [datetime.date(2000, m, 1).strftime("%B") for m in range(1, 13)]
 YEAR_OPTS   = ["All"] + [str(y) for y in range(2022, datetime.date.today().year + 3)]
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  DATABASE
@@ -305,6 +301,555 @@ def export_excel(rows, filepath, customer_mode=False):
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
     wb.save(filepath)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CANVAS TABLE
+# ══════════════════════════════════════════════════════════════════════════════
+class CanvasTable:
+    """Excel-like table using tkinter.Canvas with gridlines."""
+    def __init__(self, parent, columns, on_double_click=None, on_select=None):
+        self.parent = parent
+        self.columns = list(columns)  # list of (col_id, header, width, wrap)
+        self.on_double_click = on_double_click
+        self.on_select = on_select
+        self._data = []  # list of dicts with raw data
+        self._displayed_rows = []  # indices into _data for currently displayed (filtered) rows
+        self._selected_idx = None  # currently selected row index (into _displayed_rows)
+        self._id_map = {}  # displayed row index -> db_id
+        self._wrap_cols = {c[0] for c in columns if c[3]}
+
+        # Colors
+        self.bg = C["surface"]
+        self.header_bg = C["header"] 
+        self.header_fg = "white"
+        self.row_bg = C["surface"]
+        self.alt_row_bg = C["stripe"]
+        self.selected_bg = C["sel"]
+        self.grid_color = C["border"]
+        self.text_color = C["text"]
+        self.highlight_color = C["accent"]
+
+        # Row appearance
+        self.default_row_height = 32
+        self.header_height = 32
+        self.serial_width = 40
+        self._col_widths = [self.serial_width] + [c[2] for c in columns]  # including serial
+        self._row_heights = []  # computed per row
+        self._cell_texts = {}  # (row_idx, col_idx) -> wrapped text
+
+        # Resizing state
+        self._resize_col_idx = None
+        self._resize_row_idx = None
+        self._resize_start_x = 0
+        self._resize_start_y = 0
+        self._resize_start_width = 0
+        self._resize_start_height = 0
+        self._resize_line_id = None
+        self._sort_col = None
+        self._sort_reverse = False
+
+        # Cell selection highlight (persistent until another cell clicked)
+        self._highlight_rect_id = None
+        self._selected_highlight_row = None
+        self._selected_highlight_col = None
+
+        # Track selected column for keyboard copy
+        self._selected_col_idx = None
+
+        # Manual resize tracking (to preserve user-set sizes)
+        self._manual_row_heights = {}  # row_idx -> height
+
+        # Build UI
+        self._build()
+
+    def _build(self):
+        # Container frame
+        self.frame = ctk.CTkFrame(self.parent, fg_color=self.bg, corner_radius=10)
+
+        # Canvas with scrollbars
+        self.canvas = tk.Canvas(self.frame, bg=self.bg, highlightthickness=0)
+        self.vsb = tk.Scrollbar(self.frame, orient="vertical", command=self.canvas.yview)
+        self.hsb = tk.Scrollbar(self.frame, orient="horizontal", command=self.canvas.xview)
+        self.canvas.configure(yscrollcommand=self.vsb.set, xscrollcommand=self.hsb.set)
+
+        # Grid layout
+        self.canvas.grid(row=0, column=0, sticky="nsew", padx=(6, 0), pady=6)
+        self.vsb.grid(row=0, column=1, sticky="ns", pady=6, padx=(0, 4))
+        self.hsb.grid(row=1, column=0, sticky="ew", padx=(6, 0), pady=(0, 4))
+        self.frame.grid_rowconfigure(0, weight=1)
+        self.frame.grid_columnconfigure(0, weight=1)
+
+        # Bind events
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.canvas.bind("<Double-1>", self._on_double_click)
+        self.canvas.bind("<Configure>", lambda e: self._draw())
+        self.canvas.bind("<Motion>", self._on_motion)
+        # Bind Ctrl+C globally for reliable keyboard capture
+        self.frame.winfo_toplevel().bind_all("<Control-c>", self._on_copy)
+        self.frame.winfo_toplevel().bind_all("<Control-C>", self._on_copy)
+
+        # Initial draw
+        self._draw()
+
+    def _total_width(self):
+        return sum(self._col_widths)
+
+    def _col_x_positions(self):
+        """Return list of x positions for each column (including serial)."""
+        xs = [0]
+        for w in self._col_widths:
+            xs.append(xs[-1] + w)
+        return xs
+
+    def _row_y_positions(self):
+        """Return list of y positions for each row."""
+        ys = [self.header_height]
+        for h in self._row_heights:
+            ys.append(ys[-1] + h)
+        return ys
+
+    def _measure_text_height(self, text, width, font_family, font_size):
+        """Measure actual rendered text height using a temporary canvas item."""
+        if not text:
+            return 0
+        # Create temporary text item with wrapping
+        item = self.canvas.create_text(0, 0, text=text, width=width,
+                                       font=(font_family, font_size),
+                                       anchor="nw")
+        bbox = self.canvas.bbox(item)
+        self.canvas.delete(item)
+        if bbox:
+            return bbox[3] - bbox[1]  # height = bottom - top
+        return 0
+
+    def _compute_row_heights(self):
+        """Compute row heights based on actual measured wrapped text height."""
+        self._row_heights = []
+        self._cell_texts = {}
+        self._cell_heights = {}  # (row_idx, col_idx) -> measured height
+        min_h = self.default_row_height
+        pad_v = 8
+
+        # Pre-create canvas if not exists (needed for measurement)
+        if not hasattr(self, 'canvas') or not self.canvas.winfo_exists():
+            return
+
+        for row_idx, data_idx in enumerate(self._displayed_rows):
+            # Check if this row has a manual height set
+            if row_idx in self._manual_row_heights:
+                row = self._data[data_idx]
+                self._cell_texts[(row_idx, 0)] = str(row_idx + 1)
+                for col_idx, (cid, _, w, wrap) in enumerate(self.columns, start=1):
+                    text = row.get(cid, "")
+                    self._cell_texts[(row_idx, col_idx)] = text
+                self._row_heights.append(self._manual_row_heights[row_idx])
+                continue
+
+            row = self._data[data_idx]
+            max_text_h = 0
+
+            # Serial column - center aligned, no wrapping needed
+            self._cell_texts[(row_idx, 0)] = str(row_idx + 1)
+            serial_h = self._measure_text_height(str(row_idx + 1), self.serial_width - 12,
+                                                  F["family"], F["size_sm"])
+            max_text_h = max(max_text_h, serial_h)
+            self._cell_heights[(row_idx, 0)] = serial_h
+
+            # Data columns
+            for col_idx, (cid, _, w, wrap) in enumerate(self.columns, start=1):
+                text = row.get(cid, "")
+                self._cell_texts[(row_idx, col_idx)] = text
+                # Use actual current column width from _col_widths
+                actual_width = self._col_widths[col_idx]
+
+                if wrap and text:
+                    # Measure with wrapping enabled
+                    text_h = self._measure_text_height(text, actual_width - 12,
+                                                       F["family"], F["size_sm"])
+                elif text:
+                    # Single line measurement
+                    text_h = self._measure_text_height(text, actual_width,
+                                                       F["family"], F["size_sm"])
+                else:
+                    text_h = 0
+
+                self._cell_heights[(row_idx, col_idx)] = text_h
+                max_text_h = max(max_text_h, text_h)
+
+            # Row height = max text height + vertical padding
+            row_h = max(min_h, max_text_h + pad_v)
+            self._row_heights.append(row_h)
+
+    def _draw(self):
+        self.canvas.delete("all")
+
+        # Compute row heights first
+        self._compute_row_heights()
+
+        total_w = self._total_width()
+        ys = self._row_y_positions()
+        total_h = ys[-1] if ys else self.header_height
+
+        # Set scroll region
+        self.canvas.configure(scrollregion=(0, 0, total_w, total_h))
+
+        xs = self._col_x_positions()
+
+        # Draw header
+        y = 0
+        headers = [("#", self.serial_width)] + [(c[1], self._col_widths[i+1]) for i, c in enumerate(self.columns)]
+        for i, (hdr, w) in enumerate(headers):
+            x1, x2 = xs[i], xs[i+1]
+            # Header background
+            self.canvas.create_rectangle(x1, y, x2, y + self.header_height,
+                                         fill=self.header_bg, outline="", tags="header")
+            # Header text with sort indicator
+            display_hdr = hdr
+            if i > 0 and self._sort_col == self.columns[i-1][0]:
+                display_hdr = f"{hdr} {'▼' if self._sort_reverse else '▲'}"
+            self.canvas.create_text((x1 + x2) // 2, y + self.header_height // 2,
+                                    text=display_hdr, fill=self.header_fg,
+                                    font=(F["family"], F["size_sm"], "bold"),
+                                    tags="header")
+            # Resize handle (small area at right edge of header)
+            if i > 0:  # Not for serial column
+                handle_x = x2 - 3
+                self.canvas.create_line(handle_x, y + 4, handle_x, y + self.header_height - 4,
+                                        fill=self.header_bg, width=6, tags=("resize_handle", f"col_resize_{i}"))
+
+        # Header bottom border
+        self.canvas.create_line(0, self.header_height, total_w, self.header_height,
+                                fill=self.grid_color, width=1)
+
+        # Draw rows
+        for row_idx, data_idx in enumerate(self._displayed_rows):
+            row = self._data[data_idx]
+            y1, y2 = ys[row_idx], ys[row_idx + 1]
+            row_h = y2 - y1
+            is_selected = (row_idx == self._selected_idx)
+            bg = self.selected_bg if is_selected else (self.alt_row_bg if row_idx % 2 else self.row_bg)
+
+            # Row background
+            self.canvas.create_rectangle(0, y1, total_w, y2,
+                                         fill=bg, outline="", tags=f"row_{row_idx}")
+
+            # Serial number cell
+            x1, x2 = xs[0], xs[1]
+            text = self._cell_texts.get((row_idx, 0), str(row_idx + 1))
+            self.canvas.create_text((x1 + x2) // 2, (y1 + y2) // 2,
+                                    text=text, fill=self.text_color,
+                                    font=(F["family"], F["size_sm"]),
+                                    tags=(f"row_{row_idx}", "cell"))
+
+            # Data cells
+            left_align_cols = {"desc", "solution", "remarks"}
+            for col_idx, (cid, _, w, wrap) in enumerate(self.columns, start=1):
+                x1, x2 = xs[col_idx], xs[col_idx + 1]
+                text = self._cell_texts.get((row_idx, col_idx), "")
+                cell_h = self._cell_heights.get((row_idx, col_idx), 0)
+                is_left_align = cid in left_align_cols
+
+                # Status-based text color
+                status = row.get("status", "")
+                if cid == "status":
+                    fg = {"Open": C["open"], "Clarification": C["clarif"], "Closed": C["closed"]}.get(text, self.text_color)
+                elif status == "Open":
+                    fg = C["open"]
+                elif status == "Clarification":
+                    fg = C["clarif"]
+                elif status == "Closed":
+                    fg = C["closed"]
+                else:
+                    fg = self.text_color
+
+                # Render with appropriate alignment
+                col_width = x2 - x1
+                if is_left_align:
+                    # Left + middle aligned (vertically centered, left horizontal)
+                    self.canvas.create_text(x1 + 6, (y1 + y2) // 2,
+                                            text=text, fill=fg, anchor="w",
+                                            width=col_width - 12 if wrap else None,
+                                            font=(F["family"], F["size_sm"]),
+                                            tags=(f"row_{row_idx}", f"cell_{row_idx}_{col_idx}", "cell"))
+                else:
+                    # Center-aligned both axes
+                    self.canvas.create_text((x1 + x2) // 2, (y1 + y2) // 2,
+                                            text=text, fill=fg, anchor="center",
+                                            font=(F["family"], F["size_sm"]),
+                                            tags=(f"row_{row_idx}", f"cell_{row_idx}_{col_idx}", "cell"))
+
+            # Row resize handle (at bottom of each row)
+            handle_y = y2 - 2
+            self.canvas.create_line(0, handle_y, total_w, handle_y,
+                                    fill=bg, width=4, tags=("resize_handle", f"row_resize_{row_idx}"))
+
+        # Draw vertical gridlines
+        for x in xs:
+            self.canvas.create_line(x, 0, x, total_h, fill=self.grid_color, width=1)
+
+        # Draw horizontal gridlines
+        for y in ys:
+            self.canvas.create_line(0, y, total_w, y, fill=self.grid_color, width=1)
+
+        # Bind row tags for click/selection
+        for i in range(len(self._displayed_rows)):
+            self.canvas.tag_bind(f"row_{i}", "<Button-1>", lambda e, idx=i: self._select_row(idx))
+
+        # Reapply cell selection highlight after redraw
+        if (self._selected_highlight_row is not None and
+            self._selected_highlight_col is not None and
+            self._selected_highlight_row < len(self._displayed_rows)):
+            row_idx = self._selected_highlight_row
+            col_idx = self._selected_highlight_col
+            if col_idx < len(xs):
+                self._show_cell_highlight(
+                    row_idx, col_idx,
+                    xs[col_idx], ys[row_idx],
+                    xs[col_idx + 1], ys[row_idx + 1]
+                )
+
+    def _on_click(self, event):
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+
+        # Check for resize handle clicks first
+        items = self.canvas.find_overlapping(x-2, y-2, x+2, y+2)
+        for item in items:
+            tags = self.canvas.gettags(item)
+            for tag in tags:
+                if tag.startswith("col_resize_"):
+                    self._resize_col_idx = int(tag.split("_")[-1])
+                    self._resize_start_x = x
+                    self._resize_start_width = self._col_widths[self._resize_col_idx]
+                    return
+                elif tag.startswith("row_resize_"):
+                    self._resize_row_idx = int(tag.split("_")[-1])
+                    self._resize_start_y = y
+                    self._resize_start_height = self._row_heights[self._resize_row_idx]
+                    return
+
+        # Check if click is on header for sorting
+        if y < self.header_height:
+            xs = self._col_x_positions()
+            for i, (cid, hdr, w, _) in enumerate(self.columns):
+                if xs[i + 1] <= x < xs[i + 2]:
+                    if self.on_select:
+                        self.on_select("sort", cid)
+                    return
+        else:
+            # Check for cell click (for copy)
+            self._handle_cell_click(x, y)
+
+    def _on_motion(self, event):
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+
+        # Check if near resize handle
+        items = self.canvas.find_overlapping(x-3, y-3, x+3, y+3)
+        for item in items:
+            tags = self.canvas.gettags(item)
+            if "resize_handle" in tags:
+                self.canvas.configure(cursor="sb_h_double_arrow" if "col_resize" in str(tags) else "sb_v_double_arrow")
+                return
+        self.canvas.configure(cursor="")
+
+    def _on_drag(self, event):
+        if self._resize_col_idx is not None:
+            x = self.canvas.canvasx(event.x)
+            delta = x - self._resize_start_x
+            new_width = max(30, self._resize_start_width + delta)
+            self._col_widths[self._resize_col_idx] = new_width
+            # Update columns list to reflect new width
+            col_idx = self._resize_col_idx - 1
+            if 0 <= col_idx < len(self.columns):
+                c = self.columns[col_idx]
+                self.columns[col_idx] = (c[0], c[1], new_width, c[3])
+            self._draw()
+        elif self._resize_row_idx is not None:
+            y = self.canvas.canvasy(event.y)
+            delta = y - self._resize_start_y
+            new_height = max(20, self._resize_start_height + delta)
+            self._manual_row_heights[self._resize_row_idx] = new_height
+            self._draw()
+
+    def _on_release(self, event):
+        self._resize_col_idx = None
+        self._resize_row_idx = None
+        self._resize_start_x = 0
+        self._resize_start_y = 0
+        self.canvas.configure(cursor="")
+
+    def _handle_cell_click(self, x, y):
+        """Handle cell click for click-to-copy functionality."""
+        xs = self._col_x_positions()
+        ys = self._row_y_positions()
+
+        # Find column
+        col_idx = None
+        for i in range(len(xs) - 1):
+            if xs[i] <= x < xs[i + 1]:
+                col_idx = i
+                break
+
+        # Find row
+        row_idx = None
+        for i in range(len(ys) - 1):
+            if ys[i] <= y < ys[i + 1]:
+                row_idx = i
+                break
+
+        if col_idx is not None and row_idx is not None:
+            # Track selected column for keyboard copy
+            self._selected_col_idx = col_idx
+            # Get cell content
+            text = self._cell_texts.get((row_idx, col_idx), "")
+            if text:
+                # Copy to clipboard
+                self.canvas.clipboard_clear()
+                self.canvas.clipboard_append(text)
+
+            # Show highlight
+            self._show_cell_highlight(row_idx, col_idx, xs[col_idx], ys[row_idx], xs[col_idx + 1], ys[row_idx + 1])
+
+    def _show_cell_highlight(self, row_idx, col_idx, x1, y1, x2, y2):
+        """Show persistent highlight on selected cell. Cleared only when another cell is clicked."""
+        # Clear any existing highlight first
+        self._clear_cell_highlight()
+
+        # Store current selection
+        self._selected_highlight_row = row_idx
+        self._selected_highlight_col = col_idx
+
+        # Draw highlight overlay
+        self._highlight_rect_id = self.canvas.create_rectangle(
+            x1 + 1, y1 + 1, x2 - 1, y2 - 1,
+            outline=self.highlight_color, width=2, fill="",
+            tags="cell_highlight"
+        )
+        self.canvas.tag_raise("cell_highlight")
+        # Raise above text items
+        for item in self.canvas.find_withtag("cell"):
+            self.canvas.tag_raise(item)
+
+    def _clear_cell_highlight(self):
+        """Delete the highlight rectangle."""
+        if self._highlight_rect_id:
+            self.canvas.delete(self._highlight_rect_id)
+            self._highlight_rect_id = None
+        self._selected_highlight_row = None
+        self._selected_highlight_col = None
+
+    def _on_double_click(self, event):
+        if self._selected_idx is not None and self.on_double_click:
+            self.on_double_click(self._selected_idx)
+
+    def _on_copy(self, event):
+        """Handle Ctrl+C to copy selected cell to clipboard and clear highlight."""
+        # Clear cell selection highlight
+        self._clear_cell_highlight()
+
+        if self._selected_idx is None:
+            return
+
+        # Default to first data column if no specific column selected
+        col_idx = self._selected_col_idx if self._selected_col_idx is not None else 1
+
+        # Get cell content
+        text = self._cell_texts.get((self._selected_idx, col_idx), "")
+        if text:
+            # Copy to clipboard
+            self.canvas.clipboard_clear()
+            self.canvas.clipboard_append(text)
+
+    def _select_row(self, row_idx):
+        self._selected_idx = row_idx
+        self._selected_col_idx = None
+        # Clear cell selection highlight when row is selected
+        self._selected_highlight_row = None
+        self._selected_highlight_col = None
+        self._draw()
+        if self.on_select:
+            db_id = self._id_map.get(row_idx)
+            self.on_select("select", db_id)
+
+    def clear(self):
+        self._data = []
+        self._displayed_rows = []
+        self._selected_idx = None
+        self._selected_col_idx = None
+        self._selected_highlight_row = None
+        self._selected_highlight_col = None
+        self._id_map = {}
+        self._manual_row_heights = {}
+        self._draw()
+
+    def add_row(self, db_id, data):
+        idx = len(self._data)
+        self._data.append(data)
+        self._displayed_rows.append(idx)
+        self._id_map[len(self._displayed_rows) - 1] = db_id
+        self._draw()
+
+    def get_db_id(self, displayed_idx):
+        return self._id_map.get(displayed_idx)
+
+    def get_selected_db_ids(self):
+        if self._selected_idx is not None:
+            db_id = self._id_map.get(self._selected_idx)
+            return [db_id] if db_id else []
+        return []
+
+    def clear_selection(self):
+        self._selected_idx = None
+        self._draw()
+
+    def pack(self, **kw):
+        self.frame.pack(**kw)
+
+    def filter_rows(self, matching_indices):
+        """Filter to show only rows with these data indices."""
+        self._displayed_rows = matching_indices
+        self._selected_idx = None
+        # Clear cell selection when data changes
+        self._selected_highlight_row = None
+        self._selected_highlight_col = None
+        # Clear manual heights since displayed rows changed
+        self._manual_row_heights = {}
+        # Rebuild id_map
+        self._id_map = {i: self._data[idx]["_db_id"] for i, idx in enumerate(matching_indices) if "_db_id" in self._data[idx]}
+        self._draw()
+
+    def show_all_rows(self):
+        self._displayed_rows = list(range(len(self._data)))
+        self._selected_idx = None
+        # Clear cell selection when data changes
+        self._selected_highlight_row = None
+        self._selected_highlight_col = None
+        # Clear manual heights since displayed rows changed
+        self._manual_row_heights = {}
+        self._id_map = {i: self._data[idx]["_db_id"] for i, idx in enumerate(self._displayed_rows) if "_db_id" in self._data[idx]}
+        self._draw()
+
+    def sort_by(self, col_id, reverse=False):
+        """Sort displayed rows by column."""
+        self._sort_col = col_id
+        self._sort_reverse = reverse
+        # Clear cell selection when row order changes
+        self._selected_highlight_row = None
+        self._selected_highlight_col = None
+        # Clear manual heights since row order changed
+        self._manual_row_heights = {}
+        def key_fn(data_idx):
+            return self._data[data_idx].get(col_id, "")
+        self._displayed_rows.sort(key=key_fn, reverse=reverse)
+        self._id_map = {i: self._data[idx]["_db_id"] for i, idx in enumerate(self._displayed_rows) if "_db_id" in self._data[idx]}
+        self._draw()
+
+    def get_row_count(self):
+        return len(self._displayed_rows)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -649,8 +1194,6 @@ class CopyPasteDialog(ctk.CTkToplevel):
     def __init__(self, parent, system_number, issue_desc, sps_number):
         super().__init__(parent)
         self.title("Copy-Paste Text")
-        self.geometry("640x620")
-        self.resizable(True, True)
         self.grab_set()
         self.configure(fg_color=C["bg"])
         self._build(system_number, issue_desc, sps_number)
@@ -667,8 +1210,8 @@ class CopyPasteDialog(ctk.CTkToplevel):
         desc_of_def = f"{systems_block}\n\n{desc}"
         det_dispos  = f"AMAT SPS {sps_num} submitted."
 
-        outer = ctk.CTkScrollableFrame(self, fg_color=C["bg"], corner_radius=0)
-        outer.pack(fill="both", expand=True)
+        outer = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
+        outer.pack(fill="both", expand=True, padx=10, pady=10)
 
         def _block(title, content, h=120):
             _lbl(outer, title, bold=True, size=F["size_sm"], color=C["header"]
@@ -687,7 +1230,12 @@ class CopyPasteDialog(ctk.CTkToplevel):
         _block("📧  Email body",                            email_text,  h=170)
         _block("📋  NCR — Desc. of Def. / Req. for Change", desc_of_def, h=140)
         _block("📋  NCR — Det. Dispos. / Reas. for Change", det_dispos,  h=60)
-        _btn(self, "Close", self.destroy, outline=True, width=100).pack(pady=14)
+
+        # Auto-size height to fit content, keep width at 640
+        self.update_idletasks()
+        height = outer.winfo_reqheight() + 60
+        self.geometry(f"640x{height}")
+        self.resizable(False, False)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -981,7 +1529,7 @@ class App(ctk.CTk):
                      font=(F["family"], F["size_md"], "bold")
                      ).pack(side="left", padx=18, pady=6)
             
-        tk.Label(bar, text="Made by Sankar  |  v1.0",
+        tk.Label(bar, text="Made by Sankar  |  v1.1",
                  bg=C["panel"], fg=C["subtle"],
                  font=(F["family"], F["size_sm"] - 1)).pack(side="right", padx=14)
 
@@ -1024,7 +1572,7 @@ class App(ctk.CTk):
         self._sel_lbl.pack(side="left", padx=10)
 
         # ── Search bar (right side of toolbar) ────────────────────────────────
-        _lbl(bar, "Hold Ctrl / Shift to select multiple rows",
+        _lbl(bar, "Click row to select, double-click to edit",
              size=F["size_sm"], color=C["subtle"]).pack(side="right", padx=(0, 16))
 
         # Match counter
@@ -1049,10 +1597,6 @@ class App(ctk.CTk):
         self._search_entry.pack(side="right", padx=(0, 4))
         self._search_var.trace_add("write", lambda *_: self._search_apply())
 
-        # Ctrl+F focuses the search bar from anywhere in the window
-        self.bind_all("<Control-f>", lambda e: (
-            self._search_entry.focus_set(),
-            self._search_entry.select_range(0, "end")))
         # Escape clears and dismisses search
         self._search_entry.bind("<Escape>", lambda e: self._search_clear())
 
@@ -1061,64 +1605,35 @@ class App(ctk.CTk):
         outer = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=10)
         outer.pack(fill="both", expand=True, padx=14, pady=8)
 
-        s = ttk.Style(); s.theme_use("clam")
-        s.configure("T.Treeview",
-                    background=C["surface"], foreground=C["text"], rowheight=28,
-                    fieldbackground=C["surface"], font=(F["family"], F["size_sm"]),
-                    borderwidth=0)
-        s.configure("T.Treeview.Heading",
-                    background=C["header"], foreground="white",
-                    font=(F["family"], F["size_sm"], "bold"), relief="flat")
-        # All rows: black text, selected row gets a blue bg — no per-status foreground
-        s.map("T.Treeview",
-              background=[("selected", C["sel"])],
-              foreground=[("selected", C["text"])])
-        for style in ("Slim.Vertical.TScrollbar", "Slim.Horizontal.TScrollbar"):
-            s.configure(style, background=C["panel"], troughcolor=C["surface"],
-                        borderwidth=0, arrowsize=11, width=9)
-        s.map("Slim.Vertical.TScrollbar", background=[("active", C["accent"])])
-
-        col_ids  = [c[0] for c in TABLE_COLS]
-        col_hdrs = [c[1] for c in TABLE_COLS]
-        col_wids = [c[2] for c in TABLE_COLS]
         self._wrap_cols = {c[0] for c in TABLE_COLS if c[3]}
-        self._col_hdrs  = dict(zip(col_ids, col_hdrs))  # id → base header text
-        self._char_px   = 8  # approx pixels per char (Montserrat is wider than Segoe UI)
-
-        self.tree = ttk.Treeview(outer, columns=col_ids, show="headings",
-                                  selectmode="extended", style="T.Treeview")
-        for cid, hdr, w in zip(col_ids, col_hdrs, col_wids):
-            self.tree.heading(cid, text=hdr, command=lambda c=cid: self._sort(c))
-            anchor = "w" if cid in {"desc", "solution", "remarks"} else "center"
-            self.tree.column(cid, width=w, anchor=anchor, minwidth=50, stretch=False)
-
-        # Row tags: alternating stripe and status foreground colors
-        self.tree.tag_configure("alt", background=C["stripe"])
-        self.tree.tag_configure("Open", foreground=C["open"])
-        self.tree.tag_configure("Clarification", foreground=C["clarif"])
-        self.tree.tag_configure("Closed", foreground=C["closed"])
-
-        vsb = ttk.Scrollbar(outer, orient="vertical",   command=self.tree.yview,
-                            style="Slim.Vertical.TScrollbar")
-        hsb = ttk.Scrollbar(outer, orient="horizontal", command=self.tree.xview,
-                            style="Slim.Horizontal.TScrollbar")
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        self.tree.grid(row=0, column=0, sticky="nsew", padx=(6, 0), pady=6)
-        vsb.grid(row=0, column=1, sticky="ns",  pady=6,      padx=(0, 4))
-        hsb.grid(row=1, column=0, sticky="ew",  padx=(6, 0), pady=(0, 4))
-        outer.grid_rowconfigure(0, weight=1)
-        outer.grid_columnconfigure(0, weight=1)
-
-        self.tree.bind("<Double-1>",         self._open_issue)
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
-        self.tree.bind("<ButtonRelease-1>",  lambda _: self.after(10, self._apply_wrap))
-        self.tree.bind("<Shift-MouseWheel>", self._on_horizontal_scroll)
-        self.winfo_toplevel().bind("<Button-1>", self._deselect_if_outside, add="+")
+        self._col_hdrs  = {c[0]: c[1] for c in TABLE_COLS}  # id → base header text
         self._sort_col = None
         self._sort_rev = False
-    
-    def _on_horizontal_scroll(self, event):
-        self.tree.xview_scroll(int(-1*(event.delta/120))*50, "units")
+
+        self.table = CanvasTable(outer, TABLE_COLS,
+                                  on_double_click=self._on_table_double_click,
+                                  on_select=self._on_table_event)
+        self.table.pack(fill="both", expand=True, padx=6, pady=6)
+
+        # Bind deselect when clicking outside
+        self.winfo_toplevel().bind("<Button-1>", self._deselect_if_outside, add="+")
+        # Bind Ctrl+F for search
+        self.bind_all("<Control-f>", lambda e: (
+            self._search_entry.focus_set(),
+            self._search_entry.select_range(0, "end")))
+
+    def _on_table_double_click(self, row_idx):
+        db_id = self.table.get_db_id(row_idx)
+        if db_id:
+            self._open_by_id(db_id)
+
+    def _on_table_event(self, event_type, data):
+        if event_type == "sort":
+            self._sort(data)
+        elif event_type == "select":
+            n = 1 if data else 0
+            self._sel_lbl.configure(
+                text=f"{n} row{'s' if n != 1 else ''} selected" if n else "")
 
     # ── Search ────────────────────────────────────────────────────────────────
     def _search_apply(self, *_):
@@ -1133,32 +1648,23 @@ class App(ctk.CTk):
             self._search_clear_btn.pack_forget()
 
         if not query:
-            # No query — restore all rows in original order
-            for iid in list(self.tree.get_children()):
-                self.tree.detach(iid)
-            for iid in self._id_map:
-                self.tree.reattach(iid, "", "end")
+            # No query — restore all rows
+            self.table.show_all_rows()
+            n = self.table.get_row_count()
             self._search_match_lbl.configure(text="")
-            self._apply_wrap()
             return
 
         # Split into tokens so "BOM FEP" matches rows containing both words
         tokens = query.split()
         matches = []
-        hidden  = []
 
-        for iid, raw in self._raw_text.items():
-            haystack = " ".join(str(v) for v in raw.values()).lower()
+        for i, row in enumerate(self.table._data):
+            haystack = " ".join(str(v) for v in row.values()).lower()
             if all(t in haystack for t in tokens):
-                matches.append(iid)
-            else:
-                hidden.append(iid)
+                matches.append(i)
 
-        # Detach non-matching rows, reattach matching ones
-        for iid in hidden:
-            self.tree.detach(iid)
-        for iid in matches:
-            self.tree.reattach(iid, "", "end")
+        # Filter table
+        self.table.filter_rows(matches)
 
         # Update match counter
         n = len(matches)
@@ -1166,88 +1672,36 @@ class App(ctk.CTk):
             text=f"{n} match{'es' if n != 1 else ''}" if n else "No matches",
             text_color=C["subtle"] if n else C["open"])
 
-        self._apply_wrap()
-
     def _search_clear(self):
         """Clear the search query and restore all rows."""
         self._search_var.set("")
         self._search_entry.focus_set()
-
-    # ── Word-wrap & dynamic row height ────────────────────────────────────────
-    def _wrap_text(self, text, col_id):
-        """Wrap text at word boundaries to fit the current column pixel width."""
-        if not text:
-            return ""
-        # Subtract a small gutter (6px each side) so text doesn't butt against the edge
-        usable_px = max(1, self.tree.column(col_id, "width") - 12)
-        max_chars  = max(6, usable_px // self._char_px)
-        lines, current, length = [], [], 0
-        for word in text.split():
-            extra = 1 if current else 0
-            if length + extra + len(word) <= max_chars:
-                current.append(word); length += extra + len(word)
-            else:
-                if current: lines.append(" ".join(current))
-                current, length = [word], len(word)
-        if current: lines.append(" ".join(current))
-        return "\n".join(lines)
-
-    def _apply_wrap(self):
-        """Re-wrap all wrap-column text and set rowheight to fit the tallest wrapped cell."""
-        col_ids    = self.tree["columns"]
-        line_h     = F["size_sm"] + 8   # px per line including leading (generous for Montserrat)
-        pad_v      = 10                  # total vertical cell padding
-        min_height = 32
-        max_height = min_height
-
-        for iid in self.tree.get_children():
-            raw       = self._raw_text.get(iid, {})
-            new_vals  = []
-            row_lines = 1
-            for c in col_ids:
-                if c in self._wrap_cols:
-                    wrapped = self._wrap_text(raw.get(c, ""), c)
-                    new_vals.append(wrapped)
-                    row_lines = max(row_lines, wrapped.count("\n") + 1)
-                else:
-                    new_vals.append(raw.get(c, ""))
-            self.tree.item(iid, values=new_vals)
-            max_height = max(max_height, row_lines * line_h + pad_v)
-
-        ttk.Style().configure("T.Treeview", rowheight=max_height)
+        self.table.show_all_rows()
+        self._search_match_lbl.configure(text="")
 
     # ── Data ──────────────────────────────────────────────────────────────────
     def _refresh(self, *_):
-        self._id_map.clear()
-        self._raw_text.clear()
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        # Clear table
+        self.table.clear()
         # Clear search and sort state on a full refresh
         self._search_var.set("")
         self._search_match_lbl.configure(text="")
-        # Clear sort arrows
+        self._search_clear_btn.pack_forget()
         self._sort_col = None
         self._sort_rev = False
-        for cid, lbl in self._col_hdrs.items():
-            self.tree.heading(cid, text=lbl)
 
-        col_ids = self.tree["columns"]
-        rows    = fetch_issues(self._fs.get(), self._ff.get(),
-                               self._fi.get(), self._fm.get(), self._fy.get())
-        for i, row in enumerate(rows):
-            status = row["status"]
-            
-            # Combine the stripe tag (if applicable) with the status tag
-            tags = ("alt", status) if i % 2 else (status,)
-            
-            raw = {
+        rows = fetch_issues(self._fs.get(), self._ff.get(),
+                           self._fi.get(), self._fm.get(), self._fy.get())
+        for row in rows:
+            data = {
+                "_db_id"  : row["id"],
                 "date"    : _fmt_date(row["date_reported"]),
                 "system"  : row["system_number"]  or "",
                 "family"  : row["product_family"],
                 "type"    : row["issue_type"],
                 "sps"     : row["sps_number"],
                 "ncr"     : row["ncr_number"],
-                "status"  : status,
+                "status"  : row["status"],
                 "desc"    : row["issue_desc"]      or "",
                 "solution": row["solution"]         or "",
                 "sol_date": _fmt_date(row["solution_date"]),
@@ -1256,13 +1710,8 @@ class App(ctk.CTk):
                 "scv"     : row["scv"],
                 "remarks" : row["remarks"]          or "",
             }
-            iid = self.tree.insert("", "end",
-                values=tuple(raw.get(c, "") for c in col_ids),
-                tags=tags)
-            self._id_map[iid]   = row["id"]
-            self._raw_text[iid] = raw
+            self.table.add_row(row["id"], data)
 
-        self._apply_wrap()
         t, o, cl, cf = get_counts()
         self._v_total.set(f"Total: {t}")
         self._v_open.set(f"Open: {o}")
@@ -1275,59 +1724,47 @@ class App(ctk.CTk):
             v.set("All")
 
     def _sort(self, col):
-        items = [(self._raw_text.get(k, {}).get(col, ""), k)
-                 for k in self.tree.get_children()]
         # Toggle direction if same col clicked again, else start ascending
         rev = (not self._sort_rev) if self._sort_col == col else False
-        items.sort(reverse=rev, key=lambda x: x[0])
-        for idx, (_, k) in enumerate(items):
-            self.tree.move(k, "", idx)
+        self.table.sort_by(col, reverse=rev)
         self._sort_col = col
         self._sort_rev = rev
-        # Update all headings: show arrow only on active column
-        for cid, base_lbl in self._col_hdrs.items():
-            if cid == col:
-                arrow = " ▼" if rev else " ▲"
-                self.tree.heading(cid, text=base_lbl + arrow)
-            else:
-                self.tree.heading(cid, text=self._col_hdrs[cid])
-
-    def _on_select(self, _):
-        n = len(self.tree.selection())
-        self._sel_lbl.configure(
-            text=f"{n} row{'s' if n != 1 else ''} selected" if n else "")
 
     def _deselect_if_outside(self, event):
         try:
             w = event.widget
             while w is not None:
-                if w is self.tree: return
+                if w is self.table.canvas:
+                    return
+                if hasattr(w, 'canvas') and w.canvas is self.table.canvas:
+                    return
                 w = w.master
         except Exception:
             pass
-        self.tree.selection_set([])
+        self.table.clear_selection()
+        self._sel_lbl.configure(text="")
 
     # ── Actions ───────────────────────────────────────────────────────────────
     def _new_issue(self):
         dlg = NewIssueDialog(self)
         self.wait_window(dlg); self._refresh()
 
-    def _open_issue(self, _):
-        sel = self.tree.selection()
-        if not sel: return
-        dlg = ManageDialog(self, self._id_map[sel[0]])
-        self.wait_window(dlg); self._refresh()
+    def _open_by_id(self, db_id):
+        dlg = ManageDialog(self, db_id)
+        self.wait_window(dlg)
+        self._refresh()
 
     def _mass_delete(self):
-        sel = self.tree.selection()
-        if not sel:
+        ids = self.table.get_selected_db_ids()
+        if not ids:
             messagebox.showinfo("No Selection", "Select rows to delete first.",
-                                parent=self); return
-        ids = [self._id_map[s] for s in sel]
+                                parent=self)
+            return
         if messagebox.askyesno("Confirm Delete",
                                f"Permanently delete {len(ids)} issue(s)?\n"
                                "This cannot be undone.", parent=self):
-            delete_by_ids(ids); self._refresh()
+            delete_by_ids(ids)
+            self._refresh()
 
     def _export(self):
         rows = fetch_issues(self._fs.get(), self._ff.get(),
