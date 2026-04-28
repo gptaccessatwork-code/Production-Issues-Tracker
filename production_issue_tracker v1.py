@@ -387,6 +387,10 @@ class CanvasTable:
         self.canvas.bind("<Double-1>", self._on_double_click)
         self.canvas.bind("<Configure>", lambda e: self._draw())
         self.canvas.bind("<Motion>", self._on_motion)
+        # Bind mouse wheel events for scrolling (Windows and Linux)
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind("<Button-4>", self._on_mousewheel)
+        self.canvas.bind("<Button-5>", self._on_mousewheel)
         # Bind Ctrl+C globally for reliable keyboard capture
         self.frame.winfo_toplevel().bind_all("<Control-c>", self._on_copy)
         self.frame.winfo_toplevel().bind_all("<Control-C>", self._on_copy)
@@ -763,6 +767,23 @@ class CanvasTable:
             # Copy to clipboard
             self.canvas.clipboard_clear()
             self.canvas.clipboard_append(text)
+
+    def _on_mousewheel(self, event):
+        """Handle mouse wheel events for scrolling (Windows and Linux)."""
+        # Windows: event.delta is a multiple of 120 (typically 120 per wheel notch)
+        # Linux: Button-4 (scroll up) and Button-5 (scroll down)
+        if hasattr(event, 'delta') and event.delta:
+            # Windows - divide by 120 to get scroll units
+            scroll_units = int(-1 * (event.delta / 120))
+        elif event.num == 4:
+            # Linux scroll up
+            scroll_units = -1
+        elif event.num == 5:
+            # Linux scroll down
+            scroll_units = 1
+        else:
+            return
+        self.canvas.yview_scroll(scroll_units, "units")
 
     def _select_row(self, row_idx):
         self._selected_idx = row_idx
