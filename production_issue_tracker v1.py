@@ -94,7 +94,7 @@ TABLE_COLS = [
 ]
 
 # --- Dropdown options --------------------------------------------------------
-FAMILIES    = ["FEP", "DDP", "ETCH"]
+FAMILIES    = ["FEP", "DDP", "ETCH", "MDP", "EPI"]
 ISSUE_TYPES = ["BOM Error", "Document Discrepancy", "Document Error",
                "Missing Document", "Design Error", "Others"]
 
@@ -1550,7 +1550,7 @@ class App(ctk.CTk):
                      font=(F["family"], F["size_md"], "bold")
                      ).pack(side="left", padx=18, pady=6)
             
-        tk.Label(bar, text="Made by Sankar  |  v1.1",
+        tk.Label(bar, text="Made by Sankar  |  v1.3",
                  bg=C["panel"], fg=C["subtle"],
                  font=(F["family"], F["size_sm"] - 1)).pack(side="right", padx=14)
 
