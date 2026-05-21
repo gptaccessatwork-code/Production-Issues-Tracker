@@ -12,7 +12,6 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from PIL import Image
-from pilmoji import Pilmoji
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -73,7 +72,7 @@ TABLE_COLS = [
 # --- Dropdown options --------------------------------------------------------
 FAMILIES    = ["FEP", "DDP", "ETCH", "MDP", "EPI"]
 ISSUE_TYPES = ["BOM Error", "Document Discrepancy", "Document Error",
-               "Missing Document", "Design Error", "Others"]
+               "Missing Document", "Design Error", "Request for Deviation", "Others"]
 TRACKER_TYPES = ["Engineering", "Material"]
 
 # --- Paths -------------------------------------------------------------------
@@ -241,10 +240,10 @@ def export_excel(engineering_rows, material_rows, filepath, customer_mode=False,
 
     hdr_fill = PatternFill("solid", fgColor="1B5DA8")
     hdr_font = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
-    title_font = Font(name="Calibri", bold=True, size=16)
+    title_font = Font(name="Calibri", bold=True, color="FFFFFF", size=16)
     ctr = Alignment(horizontal="center", vertical="top", wrap_text=True)
     lft = Alignment(horizontal="left",   vertical="top", wrap_text=True)
-    title_align = Alignment(horizontal="left", vertical="center")
+    title_align = Alignment(horizontal="center", vertical="center")
 
     current_row = 1
 
@@ -253,7 +252,8 @@ def export_excel(engineering_rows, material_rows, filepath, customer_mode=False,
         if not rows:
             return start_row
         
-        # Title banner
+        # Title banner (merged and centered across all columns)
+        ws.merge_cells(f"A{start_row}:{get_column_letter(len(headers))}{start_row}")
         cell = ws.cell(row=start_row, column=1, value=title)
         cell.font = title_font
         cell.fill = PatternFill("solid", fgColor="007EA5")
@@ -320,8 +320,8 @@ def export_excel(engineering_rows, material_rows, filepath, customer_mode=False,
         current_row += 2
         current_row = write_block(material_rows, "MATERIAL ISSUES LOG", current_row)
 
-    ws.freeze_panes = f"A{3 if export_scope != 'Both' else 3}"
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{current_row - 1}"
+    # No freeze panes
+    # No auto filter
     wb.save(filepath)
 
 
@@ -399,8 +399,10 @@ class CanvasTable:
         self.canvas.bind("<MouseWheel>", self._on_mousewheel)
         self.canvas.bind("<Button-4>", self._on_mousewheel)
         self.canvas.bind("<Button-5>", self._on_mousewheel)
-        self.frame.winfo_toplevel().bind_all("<Control-c>", self._on_copy)
-        self.frame.winfo_toplevel().bind_all("<Control-C>", self._on_copy)
+        # Bind Ctrl+C globally for reliable keyboard capture
+        # Use bind_all with '+' to add without replacing existing bindings
+        self.frame.winfo_toplevel().bind_all("<Control-c>", self._on_copy, add="+")
+        self.frame.winfo_toplevel().bind_all("<Control-C>", self._on_copy, add="+")
 
         self._draw()
 
@@ -576,6 +578,7 @@ class CanvasTable:
         for i in range(len(self._displayed_rows)):
             self.canvas.tag_bind(f"row_{i}", "<Button-1>", lambda e, idx=i: self._select_row(idx))
 
+        # Reapply cell selection highlight after redraw
         if (self._selected_highlight_row is not None and
             self._selected_highlight_col is not None and
             self._selected_highlight_row < len(self._displayed_rows)):
@@ -680,21 +683,27 @@ class CanvasTable:
             self._show_cell_highlight(row_idx, col_idx, xs[col_idx], ys[row_idx], xs[col_idx + 1], ys[row_idx + 1])
 
     def _show_cell_highlight(self, row_idx, col_idx, x1, y1, x2, y2):
+        """Show persistent highlight on selected cell. Cleared only when another cell is clicked."""
+        # Clear any existing highlight first
         self._clear_cell_highlight()
 
+        # Store current selection
         self._selected_highlight_row = row_idx
         self._selected_highlight_col = col_idx
 
+        # Draw highlight overlay
         self._highlight_rect_id = self.canvas.create_rectangle(
             x1 + 1, y1 + 1, x2 - 1, y2 - 1,
             outline=self.highlight_color, width=2, fill="",
             tags="cell_highlight"
         )
         self.canvas.tag_raise("cell_highlight")
+        # Raise above text items
         for item in self.canvas.find_withtag("cell"):
             self.canvas.tag_raise(item)
 
     def _clear_cell_highlight(self):
+        """Delete the highlight rectangle."""
         if self._highlight_rect_id:
             self.canvas.delete(self._highlight_rect_id)
             self._highlight_rect_id = None
@@ -706,15 +715,20 @@ class CanvasTable:
             self.on_double_click(self._selected_idx)
 
     def _on_copy(self, event):
+        """Handle Ctrl+C to copy selected cell to clipboard and clear highlight."""
+        # Clear cell selection highlight
         self._clear_cell_highlight()
 
         if self._selected_idx is None:
             return
 
+        # Default to first data column if no specific column selected
         col_idx = self._selected_col_idx if self._selected_col_idx is not None else 1
 
+        # Get cell content
         text = self._cell_texts.get((self._selected_idx, col_idx), "")
         if text:
+            # Copy to clipboard
             self.canvas.clipboard_clear()
             self.canvas.clipboard_append(text)
 
@@ -1416,6 +1430,11 @@ class TabContentFrame(ctk.CTkFrame):
         self._build()
 
     def _build(self):
+        # Add top padding to compensate for tabview position
+        top_spacer = ctk.CTkFrame(self, fg_color="transparent", height=5)
+        top_spacer.pack(fill="x", pady=(0, 0))
+        top_spacer.pack_propagate(False)
+        
         # Stats bar
         self._build_stats()
         
@@ -1430,7 +1449,7 @@ class TabContentFrame(ctk.CTkFrame):
 
     def _build_stats(self):
         bar = tk.Frame(self, bg=C["panel"], height=34)
-        bar.pack(fill="x"); bar.pack_propagate(False)
+        bar.pack(fill="x", padx=14); bar.pack_propagate(False)
         self._v_total  = tk.StringVar(value="Total: 0")
         self._v_open   = tk.StringVar(value="Open: 0")
         self._v_clarif = tk.StringVar(value="Clarification: 0")
@@ -1443,11 +1462,15 @@ class TabContentFrame(ctk.CTkFrame):
                      font=(F["family"], F["size_md"], "bold")
                      ).pack(side="left", padx=18, pady=6)
 
+        tk.Label(bar, text="Made by Sankar | v2.0",
+                 bg=C["panel"], fg=C["subtle"],
+                 font=(F["family"], F["size_sm"] - 1)).pack(side="right", padx=14)
+
     def _build_filters(self):
-        bar = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=0)
-        bar.pack(fill="x", ipady=6)
-        row = ctk.CTkFrame(bar, fg_color="transparent")
-        row.pack(pady=(12,0), padx=14)
+        outer = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=0)
+        outer.pack(fill="x", padx=14, pady=(0, 15))
+        row = ctk.CTkFrame(outer, fg_color="transparent")
+        row.pack(pady=10, padx=6)
         _lbl(row, "Filters:", bold=True, size=F["size_sm"], color=C["subtle"]
              ).grid(row=0, column=0, padx=(0, 10))
 
@@ -1658,13 +1681,9 @@ class App(ctk.CTk):
                       command=cmd).pack(side="right", padx=(0, 8), pady=12)
 
     def _build_tabview(self):
-        # Create container frame with grey background
-        container = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=10)
-        container.pack(fill="both", expand=True, padx=14, pady=8)
-        
-        # Create tabview inside container
-        self.tabview = ctk.CTkTabview(container)
-        self.tabview.pack(fill="both", expand=True, padx=10, pady=15)
+        # Create tabview directly in main window with transparent background
+        self.tabview = ctk.CTkTabview(self, fg_color="transparent")
+        self.tabview.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         
         # Add tabs
         self.tabview.add("Engineering Issues")
@@ -1749,15 +1768,38 @@ class App(ctk.CTk):
         # Show export scope selection dialog
         export_dialog = ExportScopeDialog(self)
         self.wait_window(export_dialog)
-        
+
         if not export_dialog.result:
             return
-        
+
         export_scope = export_dialog.result
-        
-        # Fetch data for both types
-        engineering_rows = fetch_issues(tracker_type="Engineering") if export_scope in ["Engineering", "Both"] else []
-        material_rows = fetch_issues(tracker_type="Material") if export_scope in ["Material", "Both"] else []
+
+        # Get current filter settings from active tab
+        active_tab = self.tabview.get()
+        tracker_type = "Engineering" if active_tab == "Engineering Issues" else "Material"
+        tab_frame = self._tab_frames[tracker_type]
+
+        # Fetch data with current filter settings
+        engineering_rows = []
+        material_rows = []
+        if export_scope in ["Engineering", "Both"]:
+            engineering_rows = fetch_issues(
+                status_f=tab_frame._fs.get(),
+                family_f=tab_frame._ff.get(),
+                itype_f=tab_frame._fi.get(),
+                month_f=tab_frame._fm.get(),
+                year_f=tab_frame._fy.get(),
+                tracker_type="Engineering"
+            )
+        if export_scope in ["Material", "Both"]:
+            material_rows = fetch_issues(
+                status_f=tab_frame._fs.get(),
+                family_f=tab_frame._ff.get(),
+                itype_f=tab_frame._fi.get(),
+                month_f=tab_frame._fm.get(),
+                year_f=tab_frame._fy.get(),
+                tracker_type="Material"
+            )
         
         # Determine if customer mode
         customer_mode = False
@@ -1802,7 +1844,7 @@ class ExportScopeDialog(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Select Export Scope")
-        self.geometry("400x250")
+        self.geometry("450x320")
         self.resizable(False, False)
         self.grab_set()
         self.configure(fg_color=C["bg"])
