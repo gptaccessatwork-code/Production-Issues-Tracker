@@ -1,5 +1,5 @@
 """
-AMAT Production Issue Tracker v2.0
+AMAT Production Issue Tracker v2.1
 Requires: pip install customtkinter openpyxl pillow
 """
 
@@ -47,7 +47,7 @@ F = {
 }
 
 # --- Window ------------------------------------------------------------------
-WIN_TITLE = "AMAT Production Issue Tracker v2.0"
+WIN_TITLE = "AMAT Production Issue Tracker"
 WIN_SIZE  = "1420x820"
 WIN_MIN   = (1000, 620)
 
@@ -399,10 +399,9 @@ class CanvasTable:
         self.canvas.bind("<MouseWheel>", self._on_mousewheel)
         self.canvas.bind("<Button-4>", self._on_mousewheel)
         self.canvas.bind("<Button-5>", self._on_mousewheel)
-        # Bind Ctrl+C globally for reliable keyboard capture
-        # Use bind_all with '+' to add without replacing existing bindings
-        self.frame.winfo_toplevel().bind_all("<Control-c>", self._on_copy, add="+")
-        self.frame.winfo_toplevel().bind_all("<Control-C>", self._on_copy, add="+")
+        # Bind Ctrl+C to canvas only (not globally) to allow copy in dialogs
+        self.canvas.bind("<Control-c>", self._on_copy, add="+")
+        self.canvas.bind("<Control-C>", self._on_copy, add="+")
 
         self._draw()
 
@@ -1230,7 +1229,11 @@ class NewIssueDialog(ctk.CTkToplevel):
         _optmenu(self, FAMILIES, self.fam).grid(row=r, column=1, **P, sticky="ew"); r += 1
 
         _lbl(self, "Issue Type *").grid(row=r, column=0, **P, sticky="w")
-        self.ityp = ctk.StringVar(value=ISSUE_TYPES[0])
+
+        # Default to "Request for Deviation" for Material, "BOM Error" for Engineering
+        default_issue_type = "Request for Deviation" if self.tracker_type == "Material" else ISSUE_TYPES[0]
+        self.ityp = ctk.StringVar(value=default_issue_type)
+
         _optmenu(self, ISSUE_TYPES, self.ityp).grid(row=r, column=1, **P, sticky="ew"); r += 1
 
         _lbl(self, "Issue Description *").grid(row=r, column=0, **P, sticky="nw")
@@ -1462,7 +1465,7 @@ class TabContentFrame(ctk.CTkFrame):
                      font=(F["family"], F["size_md"], "bold")
                      ).pack(side="left", padx=18, pady=6)
 
-        tk.Label(bar, text="Made by Sankar | v2.0",
+        tk.Label(bar, text="Made by Sankar | v2.1",
                  bg=C["panel"], fg=C["subtle"],
                  font=(F["family"], F["size_sm"] - 1)).pack(side="right", padx=14)
 
