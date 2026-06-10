@@ -1,105 +1,144 @@
 """
 AMAT Production Issue Tracker v2.1
-Requires: pip install customtkinter openpyxl pillow
+Requires: pip install PySide6 openpyxl pillow
 """
 
-import customtkinter as ctk
-import tkinter as tk
+from __future__ import annotations
+
+import calendar
+import datetime
+import os
+import sqlite3
 import sys
-from tkinter import messagebox, filedialog
-import sqlite3, os, datetime, calendar
+
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from PIL import Image
+from PySide6.QtCore import QDate, QEvent, QSignalBlocker, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextCharFormat
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCalendarWidget,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHeaderView,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QMenu,
+    QPushButton,
+    QPlainTextEdit,
+    QRadioButton,
+    QScrollArea,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ✏️  EASY CUSTOMISATION — edit these blocks to change the look & feel
-# ══════════════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------------
+#  EASY CUSTOMIZATION
+# -----------------------------------------------------------------------------
 
-# --- Colours -----------------------------------------------------------------
 C = {
-    "bg"      : "#e2ecf7",
-    "surface" : "#f0f6fc",
-    "panel"   : "#cddcee",
-    "header"  : "#007ea5",
-    "accent"  : "#2471c4",
-    "accent_h": "#1a5ba0",
-    "entry_bg": "#f5f9ff",
-    "border"  : "#96b5d2",
-    "text"    : "#0e1d2e",
-    "subtle"  : "#557799",
-    "open"    : "#b22222",
-    "clarif"  : "#d87300",
-    "closed"  : "#1a6e38",
-    "stripe"  : "#e6f0fb",
-    "sel"     : "#b5d2ee",
+    "bg": "#0f172a",
+    "surface": "#111c33",
+    "surface_2": "#16213b",
+    "panel": "#1b2947",
+    "header": "#0b1220",
+    "accent": "#f59e0b",
+    "accent_h": "#d97706",
+    "entry_bg": "#0d1629",
+    "border": "#2a3a5d",
+    "text": "#e5eefc",
+    "subtle": "#8ca0c4",
+    "open": "#fb7185",
+    "clarif": "#f59e0b",
+    "closed": "#34d399",
+    "stripe": "#12203a",
+    "sel": "#21365f",
 }
 
-# --- Fonts -------------------------------------------------------------------
 F = {
-    "family" : "Montserrat",
+    "family": "Segoe UI",
     "size_sm": 10,
     "size_md": 11,
     "size_lg": 13,
     "size_xl": 15,
 }
 
-# --- Window ------------------------------------------------------------------
 WIN_TITLE = "AMAT Production Issue Tracker"
-WIN_SIZE  = "1420x820"
-WIN_MIN   = (1000, 620)
+WIN_SIZE = (1420, 820)
+WIN_MIN = (1000, 620)
 
-# --- Table columns -----------------------------------------------------------
 TABLE_COLS = [
-    ("date",     "Date",             125, False),
-    ("system",   "System No.",       230, True ),
-    ("family",   "Product Family",   130, False),
-    ("type",     "Issue Type",       165, True),
-    ("sps",      "SPS No.",           145, False),
-    ("ncr",      "NCR No.",          145, False),
-    ("status",   "Status",            145, False),
-    ("desc",     "Issue Description",530, True ),
-    ("solution", "Solution",         530, True ),
-    ("sol_date", "Sol. Date",         145, False),
-    ("crf",      "CRF",               100, False),
-    ("esw",      "ESW",               100, False),
-    ("scv",      "SCV",               100, False),
-    ("remarks",  "Remarks",          530, True ),
+    ("date", "Date", 125, False),
+    ("system", "System No.", 230, True),
+    ("family", "Product Family", 130, False),
+    ("type", "Issue Type", 165, True),
+    ("sps", "SPS No.", 145, False),
+    ("ncr", "NCR No.", 145, False),
+    ("status", "Status", 145, False),
+    ("desc", "Issue Description", 530, True),
+    ("solution", "Solution", 530, True),
+    ("sol_date", "Sol. Date", 145, False),
+    ("crf", "CRF", 100, False),
+    ("esw", "ESW", 100, False),
+    ("scv", "SCV", 100, False),
+    ("remarks", "Remarks", 530, True),
 ]
 
-# --- Dropdown options --------------------------------------------------------
-FAMILIES    = ["FEP", "DDP", "ETCH", "MDP", "EPI"]
-ISSUE_TYPES = ["BOM Error", "Document Discrepancy", "Document Error",
-               "Missing Document", "Design Error", "Request for Deviation", "Others"]
+FAMILIES = ["FEP", "DDP", "ETCH", "MDP", "EPI"]
+ISSUE_TYPES = [
+    "BOM Error",
+    "Document Discrepancy",
+    "Document Error",
+    "Missing Document",
+    "Design Error",
+    "Request for Deviation",
+    "Others",
+]
 TRACKER_TYPES = ["Engineering", "Material"]
 
-# --- Paths -------------------------------------------------------------------
-if getattr(sys, 'frozen', False):
+if getattr(sys, "frozen", False):
     _HERE = os.path.dirname(sys.executable)
 else:
     _HERE = os.path.dirname(os.path.abspath(__file__))
 
-DB_PATH   = os.path.join(_HERE, "production_issues.db")
+DB_PATH = os.path.join(_HERE, "production_issues.db")
 LOGO_PATH = os.path.join(_HERE, "logo.png")
 
-# --- Derived filter lists (don't edit) ---------------------------------------
 MONTH_NAMES = ["All"] + [datetime.date(2000, m, 1).strftime("%B") for m in range(1, 13)]
-YEAR_OPTS   = ["All"] + [str(y) for y in range(2022, datetime.date.today().year + 3)]
+YEAR_OPTS = ["All"] + [str(y) for y in range(2022, datetime.date.today().year + 3)]
 
-# ══════════════════════════════════════════════════════════════════════════════
+
+# -----------------------------------------------------------------------------
 #  DATABASE
-# ══════════════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------------
+
 def _db():
     return sqlite3.connect(DB_PATH)
+
 
 def _row_factory(cursor, row):
     return dict(zip([d[0] for d in cursor.description], row))
 
+
 def init_db():
     with _db() as c:
-        c.execute("""
+        c.execute(
+            """
             CREATE TABLE IF NOT EXISTS issues (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 date_reported  TEXT DEFAULT '',
@@ -119,39 +158,54 @@ def init_db():
                 tracker_type   TEXT DEFAULT 'Engineering',
                 created_at     TEXT DEFAULT (datetime('now','localtime'))
             )
-        """)
+            """
+        )
         existing = {r[1] for r in c.execute("PRAGMA table_info(issues)")}
         for col, defn in [
-            ("ncr_number",    "TEXT DEFAULT ''"),
-            ("solution",      "TEXT DEFAULT ''"),
+            ("ncr_number", "TEXT DEFAULT ''"),
+            ("solution", "TEXT DEFAULT ''"),
             ("solution_date", "TEXT DEFAULT ''"),
-            ("crf",           "TEXT DEFAULT ''"),
-            ("esw",           "TEXT DEFAULT ''"),
-            ("scv",           "TEXT DEFAULT ''"),
-            ("remarks",       "TEXT DEFAULT ''"),
-            ("tracker_type",  "TEXT DEFAULT 'Engineering'"),
+            ("crf", "TEXT DEFAULT ''"),
+            ("esw", "TEXT DEFAULT ''"),
+            ("scv", "TEXT DEFAULT ''"),
+            ("remarks", "TEXT DEFAULT ''"),
+            ("tracker_type", "TEXT DEFAULT 'Engineering'"),
         ]:
             if col not in existing:
                 c.execute(f"ALTER TABLE issues ADD COLUMN {col} {defn}")
-        
-        # Create index on tracker_type for performance
         c.execute("CREATE INDEX IF NOT EXISTS idx_tracker_type ON issues(tracker_type)")
 
-def fetch_issues(status_f="All", family_f="All", itype_f="All",
-                 month_f="All", year_f="All", tracker_type="Engineering"):
-    q    = """SELECT id, date_reported, system_number, product_family, issue_type,
-                     issue_desc, sps_number, ncr_number, status,
-                     solution, solution_date, crf, esw, scv, remarks, tracker_type, created_at
-              FROM issues WHERE 1=1"""
+
+def fetch_issues(
+    status_f="All",
+    family_f="All",
+    itype_f="All",
+    month_f="All",
+    year_f="All",
+    tracker_type="Engineering",
+):
+    q = """
+        SELECT id, date_reported, system_number, product_family, issue_type,
+               issue_desc, sps_number, ncr_number, status,
+               solution, solution_date, crf, esw, scv, remarks, tracker_type, created_at
+        FROM issues WHERE 1=1
+    """
     args = []
-    if status_f != "All": q += " AND status=?";         args.append(status_f)
-    if family_f != "All": q += " AND product_family=?"; args.append(family_f)
-    if itype_f  != "All": q += " AND issue_type=?";     args.append(itype_f)
-    if month_f  != "All":
+    if status_f != "All":
+        q += " AND status=?"
+        args.append(status_f)
+    if family_f != "All":
+        q += " AND product_family=?"
+        args.append(family_f)
+    if itype_f != "All":
+        q += " AND issue_type=?"
+        args.append(itype_f)
+    if month_f != "All":
         q += " AND CAST(strftime('%m', date_reported) AS INTEGER)=?"
         args.append(datetime.datetime.strptime(month_f, "%B").month)
-    if year_f   != "All":
-        q += " AND strftime('%Y', date_reported)=?";    args.append(year_f)
+    if year_f != "All":
+        q += " AND strftime('%Y', date_reported)=?"
+        args.append(year_f)
     q += " AND tracker_type=?"
     args.append(tracker_type)
     q += " ORDER BY date_reported DESC, id DESC"
@@ -159,67 +213,111 @@ def fetch_issues(status_f="All", family_f="All", itype_f="All",
         c.row_factory = _row_factory
         return c.execute(q, args).fetchall()
 
+
 def fetch_by_id(db_id):
     with _db() as c:
         c.row_factory = _row_factory
         return c.execute("SELECT * FROM issues WHERE id=?", (db_id,)).fetchone()
 
-def insert_issue(date_reported, system_number, product_family, issue_type,
-                 issue_desc, sps_number, ncr_number, tracker_type="Engineering"):
+
+def insert_issue(date_reported, system_number, product_family, issue_type, issue_desc, sps_number, ncr_number, tracker_type="Engineering"):
     with _db() as c:
         cur = c.execute(
-            """INSERT INTO issues
-               (date_reported, system_number, product_family, issue_type,
-                issue_desc, sps_number, ncr_number, tracker_type)
-               VALUES (?,?,?,?,?,?,?,?)""",
+            """
+            INSERT INTO issues
             (date_reported, system_number, product_family, issue_type,
-             issue_desc, sps_number, ncr_number, tracker_type))
+             issue_desc, sps_number, ncr_number, tracker_type)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (date_reported, system_number, product_family, issue_type, issue_desc, sps_number, ncr_number, tracker_type),
+        )
         return cur.lastrowid
 
-def update_issue(db_id, date_reported, system_number, product_family, issue_type,
-                 issue_desc, sps_number, ncr_number, status,
-                 solution, solution_date, crf, esw, scv, remarks, tracker_type):
+
+def update_issue(
+    db_id,
+    date_reported,
+    system_number,
+    product_family,
+    issue_type,
+    issue_desc,
+    sps_number,
+    ncr_number,
+    status,
+    solution,
+    solution_date,
+    crf,
+    esw,
+    scv,
+    remarks,
+    tracker_type,
+):
     with _db() as c:
-        c.execute("""
+        c.execute(
+            """
             UPDATE issues SET
                 date_reported=?, system_number=?, product_family=?, issue_type=?,
                 issue_desc=?, sps_number=?, ncr_number=?, status=?,
                 solution=?, solution_date=?, crf=?, esw=?, scv=?, remarks=?, tracker_type=?
-            WHERE id=?""",
-            (date_reported, system_number, product_family, issue_type,
-             issue_desc, sps_number, ncr_number, status,
-             solution, solution_date, crf, esw, scv, remarks, tracker_type, db_id))
+            WHERE id=?
+            """,
+            (
+                date_reported,
+                system_number,
+                product_family,
+                issue_type,
+                issue_desc,
+                sps_number,
+                ncr_number,
+                status,
+                solution,
+                solution_date,
+                crf,
+                esw,
+                scv,
+                remarks,
+                tracker_type,
+                db_id,
+            ),
+        )
+
 
 def delete_by_ids(ids):
     with _db() as c:
         c.executemany("DELETE FROM issues WHERE id=?", [(i,) for i in ids])
 
+
 def get_counts(tracker_type="Engineering"):
     with _db() as c:
-        total  = c.execute("SELECT COUNT(*) FROM issues WHERE tracker_type=?", (tracker_type,)).fetchone()[0]
-        open_  = c.execute("SELECT COUNT(*) FROM issues WHERE status='Open' AND tracker_type=?", (tracker_type,)).fetchone()[0]
+        total = c.execute("SELECT COUNT(*) FROM issues WHERE tracker_type=?", (tracker_type,)).fetchone()[0]
+        open_ = c.execute("SELECT COUNT(*) FROM issues WHERE status='Open' AND tracker_type=?", (tracker_type,)).fetchone()[0]
         closed = c.execute("SELECT COUNT(*) FROM issues WHERE status='Closed' AND tracker_type=?", (tracker_type,)).fetchone()[0]
         clarif = c.execute("SELECT COUNT(*) FROM issues WHERE status='Clarification' AND tracker_type=?", (tracker_type,)).fetchone()[0]
     return total, open_, closed, clarif
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------------
 #  EXCEL EXPORT
-# ══════════════════════════════════════════════════════════════════════════════
+# -----------------------------------------------------------------------------
+
 def _fmt_date(d):
-    try:    return datetime.datetime.strptime(d, "%Y-%m-%d").strftime("%d %b %Y")
-    except: return d or ""
+    try:
+        return datetime.datetime.strptime(d, "%Y-%m-%d").strftime("%d %b %Y")
+    except Exception:
+        return d or ""
+
 
 def _xl_border():
     s = Side(style="thin", color="B0C8E0")
     return Border(left=s, right=s, top=s, bottom=s)
 
+
 def _auto_row_height(text, col_width_chars, base_pt=13, min_pt=18, padding=4):
     if not text:
         return min_pt
-    lines = sum(max(1, -(-len(p) // max(1, col_width_chars)))
-                for p in str(text).splitlines())
+    lines = sum(max(1, -(-len(p) // max(1, col_width_chars))) for p in str(text).splitlines())
     return max(min_pt, lines * base_pt + padding)
+
 
 def export_excel(engineering_rows, material_rows, filepath, customer_mode=False, export_scope="Both"):
     wb = openpyxl.Workbook()
@@ -227,42 +325,49 @@ def export_excel(engineering_rows, material_rows, filepath, customer_mode=False,
     ws.title = "Production Issues"
 
     if customer_mode:
-        headers    = ["Date Reported", "System Number", "Product Family",
-                      "Issue Type", "Issue Description", "SPS Number", "Remarks"]
+        headers = ["Date Reported", "System Number", "Product Family", "Issue Type", "Issue Description", "SPS Number", "Remarks"]
         col_widths = [14, 22, 14, 18, 60, 13, 35]
-        left_cols  = {4, 6}
+        left_cols = {4, 6}
     else:
-        headers    = ["Date Reported", "System Number", "Product Family", "Issue Type",
-                      "Issue Description", "SPS Number", "NCR Number", "Status",
-                      "Solution", "Solution Date", "CRF", "ESW", "SCV", "Remarks"]
+        headers = [
+            "Date Reported",
+            "System Number",
+            "Product Family",
+            "Issue Type",
+            "Issue Description",
+            "SPS Number",
+            "NCR Number",
+            "Status",
+            "Solution",
+            "Solution Date",
+            "CRF",
+            "ESW",
+            "SCV",
+            "Remarks",
+        ]
         col_widths = [14, 22, 14, 18, 55, 13, 13, 10, 45, 14, 12, 12, 12, 35]
-        left_cols  = {4, 8, 13}
+        left_cols = {4, 8, 13}
 
     hdr_fill = PatternFill("solid", fgColor="1B5DA8")
     hdr_font = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
     title_font = Font(name="Calibri", bold=True, color="FFFFFF", size=16)
     ctr = Alignment(horizontal="center", vertical="top", wrap_text=True)
-    lft = Alignment(horizontal="left",   vertical="top", wrap_text=True)
+    lft = Alignment(horizontal="left", vertical="top", wrap_text=True)
     title_align = Alignment(horizontal="center", vertical="center")
 
     current_row = 1
 
-    # Helper function to write a block
     def write_block(rows, title, start_row):
         if not rows:
             return start_row
-        
-        # Title banner (merged and centered across all columns)
+
         ws.merge_cells(f"A{start_row}:{get_column_letter(len(headers))}{start_row}")
         cell = ws.cell(row=start_row, column=1, value=title)
         cell.font = title_font
         cell.fill = PatternFill("solid", fgColor="007EA5")
         cell.alignment = title_align
-        
-        # Blank row gap
+
         start_row += 1
-        
-        # Headers row
         for ci, (h, w) in enumerate(zip(headers, col_widths), 1):
             cell = ws.cell(row=start_row, column=ci, value=h)
             cell.font = hdr_font
@@ -272,32 +377,34 @@ def export_excel(engineering_rows, material_rows, filepath, customer_mode=False,
             ws.column_dimensions[get_column_letter(ci)].width = w
         ws.row_dimensions[start_row].height = 26
         start_row += 1
-        
-        # Data rows
-        open_fill   = PatternFill("solid", fgColor="FDEDEC")
+
+        open_fill = PatternFill("solid", fgColor="FDEDEC")
         closed_fill = PatternFill("solid", fgColor="EAFAF1")
-        alt_fill    = PatternFill("solid", fgColor="EBF4FF")
-        
+        alt_fill = PatternFill("solid", fgColor="EBF4FF")
+
         for row in rows:
-            fill = (open_fill   if row["status"] == "Open"   else
-                    closed_fill if row["status"] == "Closed" else alt_fill)
+            fill = open_fill if row["status"] == "Open" else closed_fill if row["status"] == "Closed" else alt_fill
             values = (
-                [_fmt_date(row["date_reported"]), row["system_number"],
-                 row["product_family"], row["issue_type"], row["issue_desc"],
-                 row["sps_number"], row["remarks"]]
-                if customer_mode else
-                [_fmt_date(row["date_reported"]), row["system_number"],
-                 row["product_family"], row["issue_type"], row["issue_desc"],
-                 row["sps_number"], row["ncr_number"], row["status"],
-                 row["solution"], _fmt_date(row["solution_date"]),
-                 row["crf"], row["esw"], row["scv"], row["remarks"]]
+                [_fmt_date(row["date_reported"]), row["system_number"], row["product_family"], row["issue_type"], row["issue_desc"], row["sps_number"], row["remarks"]]
+                if customer_mode
+                else [
+                    _fmt_date(row["date_reported"]),
+                    row["system_number"],
+                    row["product_family"],
+                    row["issue_type"],
+                    row["issue_desc"],
+                    row["sps_number"],
+                    row["ncr_number"],
+                    row["status"],
+                    row["solution"],
+                    _fmt_date(row["solution_date"]),
+                    row["crf"],
+                    row["esw"],
+                    row["scv"],
+                    row["remarks"],
+                ]
             )
-            row_h = max(
-                (_auto_row_height(val, cw)
-                 for ci0, (val, cw) in enumerate(zip(values, col_widths))
-                 if ci0 in left_cols),
-                default=18
-            )
+            row_h = max((_auto_row_height(val, cw) for ci0, (val, cw) in enumerate(zip(values, col_widths)) if ci0 in left_cols), default=18)
             ws.row_dimensions[start_row].height = row_h
             for ci, (val, cw) in enumerate(zip(values, col_widths), 1):
                 cell = ws.cell(row=start_row, column=ci, value=val)
@@ -306,853 +413,721 @@ def export_excel(engineering_rows, material_rows, filepath, customer_mode=False,
                 cell.font = Font(name="Calibri", size=10)
                 cell.alignment = lft if (ci - 1) in left_cols else ctr
             start_row += 1
-        
         return start_row
 
-    # Write based on export scope
     if export_scope == "Engineering":
         current_row = write_block(engineering_rows, "ENGINEERING ISSUES LOG", current_row)
     elif export_scope == "Material":
         current_row = write_block(material_rows, "MATERIAL ISSUES LOG", current_row)
-    else:  # Both
+    else:
         current_row = write_block(engineering_rows, "ENGINEERING ISSUES LOG", current_row)
-        # Two blank row gaps
         current_row += 2
         current_row = write_block(material_rows, "MATERIAL ISSUES LOG", current_row)
 
-    # No freeze panes
-    # No auto filter
     wb.save(filepath)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CANVAS TABLE
-# ══════════════════════════════════════════════════════════════════════════════
-class CanvasTable:
-    """Excel-like table using tkinter.Canvas with gridlines."""
-    def __init__(self, parent, columns, on_double_click=None, on_select=None):
-        self.parent = parent
-        self.columns = list(columns)
-        self.on_double_click = on_double_click
-        self.on_select = on_select
-        self._data = []
-        self._displayed_rows = []
-        self._selected_idx = None
-        self._id_map = {}
-        self._wrap_cols = {c[0] for c in columns if c[3]}
-
-        self.bg = C["surface"]
-        self.header_bg = C["header"] 
-        self.header_fg = "white"
-        self.row_bg = C["surface"]
-        self.alt_row_bg = C["stripe"]
-        self.selected_bg = C["sel"]
-        self.grid_color = C["border"]
-        self.text_color = C["text"]
-        self.highlight_color = C["accent"]
-
-        self.default_row_height = 32
-        self.header_height = 32
-        self.serial_width = 40
-        self._col_widths = [self.serial_width] + [c[2] for c in columns]
-        self._row_heights = []
-        self._cell_texts = {}
-
-        self._resize_col_idx = None
-        self._resize_row_idx = None
-        self._resize_start_x = 0
-        self._resize_start_y = 0
-        self._resize_start_width = 0
-        self._resize_start_height = 0
-        self._resize_line_id = None
-        self._sort_col = None
-        self._sort_reverse = False
-
-        self._highlight_rect_id = None
-        self._selected_highlight_row = None
-        self._selected_highlight_col = None
-        self._selected_col_idx = None
-        self._manual_row_heights = {}
-
-        self._build()
-
-    def _build(self):
-        self.frame = ctk.CTkFrame(self.parent, fg_color=self.bg, corner_radius=10)
-
-        self.canvas = tk.Canvas(self.frame, bg=self.bg, highlightthickness=0)
-        self.vsb = tk.Scrollbar(self.frame, orient="vertical", command=self.canvas.yview)
-        self.hsb = tk.Scrollbar(self.frame, orient="horizontal", command=self.canvas.xview)
-        self.canvas.configure(yscrollcommand=self.vsb.set, xscrollcommand=self.hsb.set)
-
-        self.canvas.grid(row=0, column=0, sticky="nsew", padx=(6, 0), pady=6)
-        self.vsb.grid(row=0, column=1, sticky="ns", pady=6, padx=(0, 4))
-        self.hsb.grid(row=1, column=0, sticky="ew", padx=(6, 0), pady=(0, 4))
-        self.frame.grid_rowconfigure(0, weight=1)
-        self.frame.grid_columnconfigure(0, weight=1)
-
-        self.canvas.bind("<Button-1>", self._on_click)
-        self.canvas.bind("<B1-Motion>", self._on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self._on_release)
-        self.canvas.bind("<Double-1>", self._on_double_click)
-        self.canvas.bind("<Configure>", lambda e: self._draw())
-        self.canvas.bind("<Motion>", self._on_motion)
-        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
-        self.canvas.bind("<Button-4>", self._on_mousewheel)
-        self.canvas.bind("<Button-5>", self._on_mousewheel)
-        # Bind Ctrl+C to canvas only (not globally) to allow copy in dialogs
-        self.canvas.bind("<Control-c>", self._on_copy, add="+")
-        self.canvas.bind("<Control-C>", self._on_copy, add="+")
-
-        self._draw()
-
-    def _total_width(self):
-        return sum(self._col_widths)
-
-    def _col_x_positions(self):
-        xs = [0]
-        for w in self._col_widths:
-            xs.append(xs[-1] + w)
-        return xs
-
-    def _row_y_positions(self):
-        ys = [self.header_height]
-        for h in self._row_heights:
-            ys.append(ys[-1] + h)
-        return ys
-
-    def _measure_text_height(self, text, width, font_family, font_size):
-        if not text:
-            return 0
-        item = self.canvas.create_text(0, 0, text=text, width=width,
-                                       font=(font_family, font_size),
-                                       anchor="nw")
-        bbox = self.canvas.bbox(item)
-        self.canvas.delete(item)
-        if bbox:
-            return bbox[3] - bbox[1]
-        return 0
-
-    def _compute_row_heights(self):
-        self._row_heights = []
-        self._cell_texts = {}
-        self._cell_heights = {}
-        min_h = self.default_row_height
-        pad_v = 8
-
-        if not hasattr(self, 'canvas') or not self.canvas.winfo_exists():
-            return
-
-        for row_idx, data_idx in enumerate(self._displayed_rows):
-            if row_idx in self._manual_row_heights:
-                row = self._data[data_idx]
-                self._cell_texts[(row_idx, 0)] = str(row_idx + 1)
-                for col_idx, (cid, _, w, wrap) in enumerate(self.columns, start=1):
-                    text = row.get(cid, "")
-                    self._cell_texts[(row_idx, col_idx)] = text
-                self._row_heights.append(self._manual_row_heights[row_idx])
-                continue
-
-            row = self._data[data_idx]
-            max_text_h = 0
-
-            self._cell_texts[(row_idx, 0)] = str(row_idx + 1)
-            serial_h = self._measure_text_height(str(row_idx + 1), self.serial_width - 12,
-                                                  F["family"], F["size_sm"])
-            max_text_h = max(max_text_h, serial_h)
-            self._cell_heights[(row_idx, 0)] = serial_h
-
-            for col_idx, (cid, _, w, wrap) in enumerate(self.columns, start=1):
-                text = row.get(cid, "")
-                self._cell_texts[(row_idx, col_idx)] = text
-                actual_width = self._col_widths[col_idx]
-
-                if wrap and text:
-                    text_h = self._measure_text_height(text, actual_width - 12,
-                                                       F["family"], F["size_sm"])
-                elif text:
-                    text_h = self._measure_text_height(text, actual_width,
-                                                       F["family"], F["size_sm"])
-                else:
-                    text_h = 0
-
-                self._cell_heights[(row_idx, col_idx)] = text_h
-                max_text_h = max(max_text_h, text_h)
-
-            row_h = max(min_h, max_text_h + pad_v)
-            self._row_heights.append(row_h)
-
-    def _draw(self):
-        self.canvas.delete("all")
-
-        self._compute_row_heights()
-
-        total_w = self._total_width()
-        ys = self._row_y_positions()
-        total_h = ys[-1] if ys else self.header_height
-
-        self.canvas.configure(scrollregion=(0, 0, total_w, total_h))
-
-        xs = self._col_x_positions()
-
-        y = 0
-        headers = [("#", self.serial_width)] + [(c[1], self._col_widths[i+1]) for i, c in enumerate(self.columns)]
-        for i, (hdr, w) in enumerate(headers):
-            x1, x2 = xs[i], xs[i+1]
-            self.canvas.create_rectangle(x1, y, x2, y + self.header_height,
-                                         fill=self.header_bg, outline="", tags="header")
-            display_hdr = hdr
-            if i > 0 and self._sort_col == self.columns[i-1][0]:
-                display_hdr = f"{hdr} {'▼' if self._sort_reverse else '▲'}"
-            self.canvas.create_text((x1 + x2) // 2, y + self.header_height // 2,
-                                    text=display_hdr, fill=self.header_fg,
-                                    font=(F["family"], F["size_sm"], "bold"),
-                                    tags="header")
-            if i > 0:
-                handle_x = x2 - 3
-                self.canvas.create_line(handle_x, y + 4, handle_x, y + self.header_height - 4,
-                                        fill=self.header_bg, width=6, tags=("resize_handle", f"col_resize_{i}"))
-
-        self.canvas.create_line(0, self.header_height, total_w, self.header_height,
-                                fill=self.grid_color, width=1)
-
-        for row_idx, data_idx in enumerate(self._displayed_rows):
-            row = self._data[data_idx]
-            y1, y2 = ys[row_idx], ys[row_idx + 1]
-            row_h = y2 - y1
-            is_selected = (row_idx == self._selected_idx)
-            bg = self.selected_bg if is_selected else (self.alt_row_bg if row_idx % 2 else self.row_bg)
-
-            self.canvas.create_rectangle(0, y1, total_w, y2,
-                                         fill=bg, outline="", tags=f"row_{row_idx}")
-
-            x1, x2 = xs[0], xs[1]
-            text = self._cell_texts.get((row_idx, 0), str(row_idx + 1))
-            self.canvas.create_text((x1 + x2) // 2, (y1 + y2) // 2,
-                                    text=text, fill=self.text_color,
-                                    font=(F["family"], F["size_sm"]),
-                                    tags=(f"row_{row_idx}", "cell"))
-
-            left_align_cols = {"desc", "solution", "remarks"}
-            for col_idx, (cid, _, w, wrap) in enumerate(self.columns, start=1):
-                x1, x2 = xs[col_idx], xs[col_idx + 1]
-                text = self._cell_texts.get((row_idx, col_idx), "")
-                cell_h = self._cell_heights.get((row_idx, col_idx), 0)
-                is_left_align = cid in left_align_cols
-
-                status = row.get("status", "")
-                if cid == "status":
-                    fg = {"Open": C["open"], "Clarification": C["clarif"], "Closed": C["closed"]}.get(text, self.text_color)
-                elif status == "Open":
-                    fg = C["open"]
-                elif status == "Clarification":
-                    fg = C["clarif"]
-                elif status == "Closed":
-                    fg = C["closed"]
-                else:
-                    fg = self.text_color
-
-                col_width = x2 - x1
-                if is_left_align:
-                    self.canvas.create_text(x1 + 6, (y1 + y2) // 2,
-                                            text=text, fill=fg, anchor="w",
-                                            width=col_width - 12 if wrap else None,
-                                            font=(F["family"], F["size_sm"]),
-                                            tags=(f"row_{row_idx}", f"cell_{row_idx}_{col_idx}", "cell"))
-                else:
-                    self.canvas.create_text((x1 + x2) // 2, (y1 + y2) // 2,
-                                            text=text, fill=fg, anchor="center",
-                                            font=(F["family"], F["size_sm"]),
-                                            tags=(f"row_{row_idx}", f"cell_{row_idx}_{col_idx}", "cell"))
-
-            handle_y = y2 - 2
-            self.canvas.create_line(0, handle_y, total_w, handle_y,
-                                    fill=bg, width=4, tags=("resize_handle", f"row_resize_{row_idx}"))
-
-        for x in xs:
-            self.canvas.create_line(x, 0, x, total_h, fill=self.grid_color, width=1)
-
-        for y in ys:
-            self.canvas.create_line(0, y, total_w, y, fill=self.grid_color, width=1)
-
-        for i in range(len(self._displayed_rows)):
-            self.canvas.tag_bind(f"row_{i}", "<Button-1>", lambda e, idx=i: self._select_row(idx))
-
-        # Reapply cell selection highlight after redraw
-        if (self._selected_highlight_row is not None and
-            self._selected_highlight_col is not None and
-            self._selected_highlight_row < len(self._displayed_rows)):
-            row_idx = self._selected_highlight_row
-            col_idx = self._selected_highlight_col
-            if col_idx < len(xs):
-                self._show_cell_highlight(
-                    row_idx, col_idx,
-                    xs[col_idx], ys[row_idx],
-                    xs[col_idx + 1], ys[row_idx + 1]
-                )
-
-    def _on_click(self, event):
-        x = self.canvas.canvasx(event.x)
-        y = self.canvas.canvasy(event.y)
-
-        items = self.canvas.find_overlapping(x-2, y-2, x+2, y+2)
-        for item in items:
-            tags = self.canvas.gettags(item)
-            for tag in tags:
-                if tag.startswith("col_resize_"):
-                    self._resize_col_idx = int(tag.split("_")[-1])
-                    self._resize_start_x = x
-                    self._resize_start_width = self._col_widths[self._resize_col_idx]
-                    return
-                elif tag.startswith("row_resize_"):
-                    self._resize_row_idx = int(tag.split("_")[-1])
-                    self._resize_start_y = y
-                    self._resize_start_height = self._row_heights[self._resize_row_idx]
-                    return
-
-        if y < self.header_height:
-            xs = self._col_x_positions()
-            for i, (cid, hdr, w, _) in enumerate(self.columns):
-                if xs[i + 1] <= x < xs[i + 2]:
-                    if self.on_select:
-                        self.on_select("sort", cid)
-                    return
-        else:
-            self._handle_cell_click(x, y)
-
-    def _on_motion(self, event):
-        x = self.canvas.canvasx(event.x)
-        y = self.canvas.canvasy(event.y)
-
-        items = self.canvas.find_overlapping(x-3, y-3, x+3, y+3)
-        for item in items:
-            tags = self.canvas.gettags(item)
-            if "resize_handle" in tags:
-                self.canvas.configure(cursor="sb_h_double_arrow" if "col_resize" in str(tags) else "sb_v_double_arrow")
-                return
-        self.canvas.configure(cursor="")
-
-    def _on_drag(self, event):
-        if self._resize_col_idx is not None:
-            x = self.canvas.canvasx(event.x)
-            delta = x - self._resize_start_x
-            new_width = max(30, self._resize_start_width + delta)
-            self._col_widths[self._resize_col_idx] = new_width
-            col_idx = self._resize_col_idx - 1
-            if 0 <= col_idx < len(self.columns):
-                c = self.columns[col_idx]
-                self.columns[col_idx] = (c[0], c[1], new_width, c[3])
-            self._draw()
-        elif self._resize_row_idx is not None:
-            y = self.canvas.canvasy(event.y)
-            delta = y - self._resize_start_y
-            new_height = max(20, self._resize_start_height + delta)
-            self._manual_row_heights[self._resize_row_idx] = new_height
-            self._draw()
-
-    def _on_release(self, event):
-        self._resize_col_idx = None
-        self._resize_row_idx = None
-        self._resize_start_x = 0
-        self._resize_start_y = 0
-        self.canvas.configure(cursor="")
-
-    def _handle_cell_click(self, x, y):
-        xs = self._col_x_positions()
-        ys = self._row_y_positions()
-
-        col_idx = None
-        for i in range(len(xs) - 1):
-            if xs[i] <= x < xs[i + 1]:
-                col_idx = i
-                break
-
-        row_idx = None
-        for i in range(len(ys) - 1):
-            if ys[i] <= y < ys[i + 1]:
-                row_idx = i
-                break
-
-        if col_idx is not None and row_idx is not None:
-            self._selected_col_idx = col_idx
-            text = self._cell_texts.get((row_idx, col_idx), "")
-            if text:
-                self.canvas.clipboard_clear()
-                self.canvas.clipboard_append(text)
-
-            self._show_cell_highlight(row_idx, col_idx, xs[col_idx], ys[row_idx], xs[col_idx + 1], ys[row_idx + 1])
-
-    def _show_cell_highlight(self, row_idx, col_idx, x1, y1, x2, y2):
-        """Show persistent highlight on selected cell. Cleared only when another cell is clicked."""
-        # Clear any existing highlight first
-        self._clear_cell_highlight()
-
-        # Store current selection
-        self._selected_highlight_row = row_idx
-        self._selected_highlight_col = col_idx
-
-        # Draw highlight overlay
-        self._highlight_rect_id = self.canvas.create_rectangle(
-            x1 + 1, y1 + 1, x2 - 1, y2 - 1,
-            outline=self.highlight_color, width=2, fill="",
-            tags="cell_highlight"
-        )
-        self.canvas.tag_raise("cell_highlight")
-        # Raise above text items
-        for item in self.canvas.find_withtag("cell"):
-            self.canvas.tag_raise(item)
-
-    def _clear_cell_highlight(self):
-        """Delete the highlight rectangle."""
-        if self._highlight_rect_id:
-            self.canvas.delete(self._highlight_rect_id)
-            self._highlight_rect_id = None
-        self._selected_highlight_row = None
-        self._selected_highlight_col = None
-
-    def _on_double_click(self, event):
-        if self._selected_idx is not None and self.on_double_click:
-            self.on_double_click(self._selected_idx)
-
-    def _on_copy(self, event):
-        """Handle Ctrl+C to copy selected cell to clipboard and clear highlight."""
-        # Clear cell selection highlight
-        self._clear_cell_highlight()
-
-        if self._selected_idx is None:
-            return
-
-        # Default to first data column if no specific column selected
-        col_idx = self._selected_col_idx if self._selected_col_idx is not None else 1
-
-        # Get cell content
-        text = self._cell_texts.get((self._selected_idx, col_idx), "")
-        if text:
-            # Copy to clipboard
-            self.canvas.clipboard_clear()
-            self.canvas.clipboard_append(text)
-
-    def _on_mousewheel(self, event):
-        if hasattr(event, 'delta') and event.delta:
-            scroll_units = int(-1 * (event.delta / 120))
-        elif event.num == 4:
-            scroll_units = -1
-        elif event.num == 5:
-            scroll_units = 1
-        else:
-            return
-        self.canvas.yview_scroll(scroll_units, "units")
-
-    def _select_row(self, row_idx):
-        self._selected_idx = row_idx
-        self._selected_col_idx = None
-        self._selected_highlight_row = None
-        self._selected_highlight_col = None
-        self._draw()
-        if self.on_select:
-            db_id = self._id_map.get(row_idx)
-            self.on_select("select", db_id)
-
-    def clear(self):
-        self._data = []
-        self._displayed_rows = []
-        self._selected_idx = None
-        self._selected_col_idx = None
-        self._selected_highlight_row = None
-        self._selected_highlight_col = None
-        self._id_map = {}
-        self._manual_row_heights = {}
-        self._draw()
-
-    def add_row(self, db_id, data):
-        idx = len(self._data)
-        self._data.append(data)
-        self._displayed_rows.append(idx)
-        self._id_map[len(self._displayed_rows) - 1] = db_id
-        self._draw()
-
-    def get_db_id(self, displayed_idx):
-        return self._id_map.get(displayed_idx)
-
-    def get_selected_db_ids(self):
-        if self._selected_idx is not None:
-            db_id = self._id_map.get(self._selected_idx)
-            return [db_id] if db_id else []
-        return []
-
-    def clear_selection(self):
-        self._selected_idx = None
-        self._draw()
-
-    def pack(self, **kw):
-        self.frame.pack(**kw)
-
-    def filter_rows(self, matching_indices):
-        self._displayed_rows = matching_indices
-        self._selected_idx = None
-        self._selected_highlight_row = None
-        self._selected_highlight_col = None
-        self._manual_row_heights = {}
-        self._id_map = {i: self._data[idx]["_db_id"] for i, idx in enumerate(matching_indices) if "_db_id" in self._data[idx]}
-        self._draw()
-
-    def show_all_rows(self):
-        self._displayed_rows = list(range(len(self._data)))
-        self._selected_idx = None
-        self._selected_highlight_row = None
-        self._selected_highlight_col = None
-        self._manual_row_heights = {}
-        self._id_map = {i: self._data[idx]["_db_id"] for i, idx in enumerate(self._displayed_rows) if "_db_id" in self._data[idx]}
-        self._draw()
-
-    def sort_by(self, col_id, reverse=False):
-        self._sort_col = col_id
-        self._sort_reverse = reverse
-        self._selected_highlight_row = None
-        self._selected_highlight_col = None
-        self._manual_row_heights = {}
-        def key_fn(data_idx):
-            return self._data[data_idx].get(col_id, "")
-        self._displayed_rows.sort(key=key_fn, reverse=reverse)
-        self._id_map = {i: self._data[idx]["_db_id"] for i, idx in enumerate(self._displayed_rows) if "_db_id" in self._data[idx]}
-        self._draw()
-
-    def get_row_count(self):
-        return len(self._displayed_rows)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  UI PRIMITIVES
-# ══════════════════════════════════════════════════════════════════════════════
-def _font(**kw):
-    return ctk.CTkFont(family=F["family"], **kw)
-
-def _lbl(parent, text, bold=False, size=None, color=None, **kw):
-    return ctk.CTkLabel(parent, text=text, anchor="w",
-                        text_color=color or C["text"],
-                        font=_font(size=size or F["size_md"],
-                                   weight="bold" if bold else "normal"), **kw)
-
-def _entry(parent, ph="", width=None, state="normal"):
-    kw = dict(fg_color=C["entry_bg"], text_color=C["text"], border_color=C["border"],
-              corner_radius=8, placeholder_text=ph, state=state,
-              font=_font(size=F["size_md"]))
+# -----------------------------------------------------------------------------
+#  UI HELPERS
+# -----------------------------------------------------------------------------
+
+def _fmt_display_date(value):
+    if not value:
+        return ""
+    try:
+        return datetime.datetime.strptime(value, "%Y-%m-%d").strftime("%d %b %Y")
+    except Exception:
+        return value
+
+
+def _parse_iso_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.datetime.strptime(value, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _stylesheet():
+    return f"""
+    QMainWindow, QWidget#AppRoot {{
+        background: {C['bg']};
+        color: {C['text']};
+        font-family: '{F['family']}';
+        font-size: {F['size_md']}pt;
+    }}
+    QLabel, QRadioButton, QCheckBox {{
+        background: transparent;
+        color: {C['text']};
+    }}
+    QFrame#HeaderBar {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                    stop:0 {C['header']},
+                                    stop:0.55 #111c33,
+                                    stop:1 #19294a);
+        border: none;
+        border-radius: 18px;
+    }}
+    QLabel#TitleLabel {{
+        color: white;
+        font-size: {F['size_xl']}pt;
+        font-weight: 700;
+    }}
+    QLabel#MutedLabel {{
+        color: {C['subtle']};
+    }}
+    QPushButton {{
+        background: {C['accent']};
+        color: #101828;
+        border: 1px solid transparent;
+        padding: 8px 14px;
+        border-radius: 10px;
+        font-weight: 700;
+    }}
+    QPushButton:hover {{
+        background: {C['accent_h']};
+        color: white;
+    }}
+    QPushButton[outline="true"] {{
+        background: {C['surface']};
+        color: {C['text']};
+        border: 1px solid {C['accent']};
+    }}
+    QPushButton[outline="true"]:hover {{
+        background: {C['sel']};
+    }}
+    QPushButton[danger="true"] {{
+        background: #a02020;
+        color: white;
+    }}
+    QPushButton[danger="true"]:hover {{
+        background: #7f1717;
+    }}
+    QToolButton {{
+        background: {C['accent']};
+        color: #101828;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        padding: 0px;
+    }}
+    QToolButton:hover {{
+        background: {C['accent_h']};
+        color: white;
+    }}
+    QLineEdit, QComboBox {{
+        background: {C['entry_bg']};
+        border: 1px solid {C['border']};
+        border-radius: 10px;
+        padding: 6px;
+        padding-right: 22px;
+        selection-background-color: {C['sel']};
+        selection-color: {C['text']};
+    }}
+    QPlainTextEdit, QTextEdit {{
+        background: {C['entry_bg']};
+        border: 1px solid {C['border']};
+        border-radius: 10px;
+        padding: 6px;
+        padding-right: 6px;
+        selection-background-color: {C['sel']};
+        selection-color: {C['text']};
+    }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding;
+        subcontrol-position: top right;
+        border: none;
+        width: 18px;
+        background: transparent;
+    }}
+    QPlainTextEdit QScrollBar:vertical, QTextEdit QScrollBar:vertical {{
+        background: transparent;
+        width: 10px;
+        margin: 0px;
+    }}
+    QPlainTextEdit QScrollBar::handle:vertical, QTextEdit QScrollBar::handle:vertical {{
+        background: {C['border']};
+        min-height: 24px;
+        border-radius: 5px;
+    }}
+    QPlainTextEdit QScrollBar::handle:vertical:hover, QTextEdit QScrollBar::handle:vertical:hover {{
+        background: {C['accent']};
+    }}
+    QPlainTextEdit QScrollBar::add-line:vertical, QPlainTextEdit QScrollBar::sub-line:vertical,
+    QTextEdit QScrollBar::add-line:vertical, QTextEdit QScrollBar::sub-line:vertical {{
+        background: transparent;
+        border: none;
+        height: 0px;
+    }}
+    QPlainTextEdit QScrollBar::add-page:vertical, QPlainTextEdit QScrollBar::sub-page:vertical,
+    QTextEdit QScrollBar::add-page:vertical, QTextEdit QScrollBar::sub-page:vertical {{
+        background: transparent;
+    }}
+    QTabWidget::pane {{
+        border: 0;
+        margin-top: 0px;
+    }}
+    QTabWidget {{
+        border: 0;
+        background: transparent;
+    }}
+    QTabBar {{
+        border-bottom: 1px solid {C['border']};
+    }}
+    QTabBar::tab {{
+        background: {C['surface']};
+        color: {C['subtle']};
+        padding: 11px 20px;
+        margin-right: 4px;
+        margin-bottom: 0px;
+        border-top-left-radius: 12px;
+        border-top-right-radius: 12px;
+        border: 1px solid {C['border']};
+    }}
+    QTabBar::tab:selected {{
+        background: {C['panel']};
+        color: {C['text']};
+        border-bottom-color: {C['panel']};
+    }}
+    QTableWidget {{
+        background: {C['surface']};
+        alternate-background-color: {C['stripe']};
+        gridline-color: {C['border']};
+        border: 1px solid {C['border']};
+        selection-background-color: {C['sel']};
+        selection-color: {C['text']};
+        border-radius: 12px;
+    }}
+    QHeaderView::section {{
+        background: {C['surface_2']};
+        color: white;
+        padding: 6px;
+        border: 1px solid {C['border']};
+        font-weight: 700;
+    }}
+    QRadioButton {{
+        spacing: 8px;
+        color: {C['text']};
+    }}
+    QScrollArea {{
+        border: none;
+        background: transparent;
+    }}
+    QScrollBar:vertical {{
+        background: transparent;
+        width: 12px;
+        margin: 2px 2px 2px 2px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {C['border']};
+        min-height: 30px;
+        border-radius: 6px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {C['accent']};
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+        background: transparent;
+        border: none;
+        height: 0px;
+    }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+        background: transparent;
+    }}
+    QScrollBar:horizontal {{
+        background: transparent;
+        height: 12px;
+        margin: 2px 2px 2px 2px;
+    }}
+    QScrollBar::handle:horizontal {{
+        background: {C['border']};
+        min-width: 30px;
+        border-radius: 6px;
+    }}
+    QScrollBar::handle:horizontal:hover {{
+        background: {C['accent']};
+    }}
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+        background: transparent;
+        border: none;
+        width: 0px;
+    }}
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+        background: transparent;
+    }}
+    """
+
+
+def _mk_label(text="", bold=False, color=None, object_name=None):
+    label = QLabel(text)
+    if object_name:
+        label.setObjectName(object_name)
+    if color:
+        label.setStyleSheet(f"color: {color};")
+    font = QFont(F["family"], F["size_md"])
+    font.setBold(bold)
+    label.setFont(font)
+    return label
+
+
+def _mk_button(text, on_click, outline=False, danger=False, width=None, color=None):
+    btn = QPushButton(text)
+    btn.setProperty("outline", outline)
+    btn.setProperty("danger", danger)
     if width:
-        kw["width"] = width
-    e = ctk.CTkEntry(parent, **kw)
-    stack = []
-    def _push(*_):
-        v = e.get()
-        if not stack or stack[-1] != v:
-            stack.append(v)
-            if len(stack) > 200: stack.pop(0)
-    def _undo(_):
-        if len(stack) > 1:
-            stack.pop(); e.delete(0, "end"); e.insert(0, stack[-1])
-        return "break"
-    e.bind("<KeyRelease>", _push)
-    e.bind("<Control-z>",  _undo)
-    return e
-
-def _textbox(parent, h=80):
-    tb = ctk.CTkTextbox(parent, height=h, fg_color=C["entry_bg"],
-                        text_color=C["text"], border_color=C["border"],
-                        border_width=1, corner_radius=8,
-                        font=_font(size=F["size_md"]),
-                        wrap="word")
-    tb._textbox.configure(undo=True, maxundo=-1)
-    return tb
-
-def _btn(parent, text, cmd, outline=False, width=120, color=None, radius=10, **kw):
-    if outline:
-        return ctk.CTkButton(parent, text=text, command=cmd, width=width,
-                             corner_radius=radius, fg_color="transparent",
-                             border_width=1, border_color=C["accent"],
-                             text_color=C["accent"], hover_color=C["panel"],
-                             font=_font(size=F["size_md"]), **kw)
-    return ctk.CTkButton(parent, text=text, command=cmd, width=width,
-                         corner_radius=radius, fg_color=color or C["accent"],
-                         hover_color=C["accent_h"], text_color="white",
-                         font=_font(size=F["size_md"]), **kw)
-
-def _section_bar(parent, title, row):
-    f = ctk.CTkFrame(parent, fg_color=C["header"], corner_radius=0, height=24)
-    f.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(10, 2))
-    _lbl(f, f"  {title}", size=F["size_sm"], bold=True, color="white"
-         ).pack(side="left", padx=8, pady=2)
-
-def _optmenu(parent, vals, var, width=None):
-    return ToggleDropdown(parent, vals, var, width=width)
-
-def _popup_xy(widget):
-    widget.update_idletasks()
-    return widget.winfo_rootx(), widget.winfo_rooty() + widget.winfo_height() + 4
+        btn.setFixedWidth(width)
+    if color and not outline and not danger:
+        btn.setStyleSheet(f"background: {color}; color: white;")
+    if on_click:
+        btn.clicked.connect(on_click)
+    btn.style().unpolish(btn)
+    btn.style().polish(btn)
+    return btn
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  TOGGLE DROPDOWN
-# ══════════════════════════════════════════════════════════════════════════════
-class ToggleDropdown(ctk.CTkFrame):
-    def __init__(self, master, values, variable, width=None):
-        super().__init__(master, fg_color="transparent")
-        self._values = values
-        self._var    = variable
-        self._popup  = None
-        w = width or 150
-        self._btn = ctk.CTkButton(
-            self, text=self._label(), width=w, anchor="w",
-            fg_color=C["accent"], hover_color=C["accent_h"],
-            text_color="white", corner_radius=8,
-            font=_font(size=F["size_md"]),
-            command=self._toggle)
-        self._btn.pack(fill="both", expand=True)
-        variable.trace_add("write", lambda *_: self._btn.configure(text=self._label()))
-
-    def _label(self):
-        return f"  {self._var.get()}  ▾"
-
-    def _toggle(self):
-        if self._popup and self._popup.winfo_exists():
-            self._close()
-        else:
-            self._show()
-
-    def _show(self):
-        x, y = _popup_xy(self._btn)
-        bw   = self._btn.winfo_width()
-
-        row_h     = 32
-        max_rows  = 10
-        n         = len(self._values)
-        visible   = min(n, max_rows)
-        pop_h     = visible * row_h
-
-        self._popup = tk.Toplevel(self)
-        self._popup.overrideredirect(True)
-        self._popup.geometry(f"{bw}x{pop_h}+{x}+{y}")
-        self._popup.configure(bg=C["border"])
-        self._popup.lift()
-
-        canvas = tk.Canvas(self._popup, bg=C["surface"], highlightthickness=0,
-                           width=bw-2, height=pop_h)
-        vsb    = tk.Scrollbar(self._popup, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-
-        if n > max_rows:
-            vsb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        inner = tk.Frame(canvas, bg=C["surface"])
-        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
-
-        def _on_inner_resize(e):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            canvas.itemconfig(win_id, width=canvas.winfo_width())
-        inner.bind("<Configure>", _on_inner_resize)
-        canvas.bind("<Configure>",
-                    lambda e: canvas.itemconfig(win_id, width=e.width))
-
-        def _wheel(e):
-            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        canvas.bind("<MouseWheel>", _wheel)
-        inner.bind("<MouseWheel>",  _wheel)
-
-        for val in self._values:
-            rf = tk.Frame(inner, bg=C["surface"], cursor="hand2", height=row_h)
-            rf.pack(fill="x"); rf.pack_propagate(False)
-            lb = tk.Label(rf, text=f"  {val}", bg=C["surface"], fg=C["text"],
-                          font=(F["family"], F["size_sm"]), anchor="w")
-            lb.pack(fill="both", expand=True)
-            for w2 in (rf, lb):
-                w2.bind("<Enter>",    lambda e, r=rf, l=lb:
-                        (r.configure(bg=C["sel"]),     l.configure(bg=C["sel"])))
-                w2.bind("<Leave>",    lambda e, r=rf, l=lb:
-                        (r.configure(bg=C["surface"]), l.configure(bg=C["surface"])))
-                w2.bind("<Button-1>", lambda e, v=val: self._pick(v))
-                w2.bind("<MouseWheel>", _wheel)
-
-        self._popup.after(50, lambda: self._popup.focus_force()
-                          if self._popup and self._popup.winfo_exists() else None)
-        self._popup.bind("<FocusOut>", self._on_focusout)
-
-    def _on_focusout(self, _):
-        if not (self._popup and self._popup.winfo_exists()): return
-        bx, by = self._btn.winfo_rootx(), self._btn.winfo_rooty()
-        bw, bh = self._btn.winfo_width(),  self._btn.winfo_height()
-        mx, my = self._popup.winfo_pointerxy()
-        self._close(skip_toggle=(bx <= mx <= bx+bw and by <= my <= by+bh))
-
-    def _pick(self, v):
-        self._var.set(v); self._close()
-
-    def _close(self, skip_toggle=False):
-        if self._popup and self._popup.winfo_exists():
-            self._popup.destroy()
-        self._popup = None
-        if skip_toggle:
-            self._btn.configure(state="disabled")
-            self.after(150, lambda: self._btn.configure(state="normal"))
+def _set_field_width(widget, width=520):
+    widget.setMinimumWidth(width)
+    widget.setMaximumWidth(width)
+    return widget
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CALENDAR WIDGET
-# ══════════════════════════════════════════════════════════════════════════════
-class CalendarPopup(tk.Toplevel):
-    def __init__(self, parent, anchor_widget, initial=None):
+def _draw_icon(kind, color):
+    pix = QPixmap(16, 16)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(QColor(color))
+    pen.setWidth(1)
+    p.setPen(pen)
+    if kind == "calendar":
+        p.drawRoundedRect(2, 3, 12, 11, 2, 2)
+        p.fillRect(2, 5, 12, 2, QColor(color))
+        p.drawLine(5, 1, 5, 5)
+        p.drawLine(11, 1, 11, 5)
+        p.drawPoint(6, 8)
+        p.drawPoint(10, 8)
+    elif kind == "clear":
+        pen.setWidth(2)
+        p.setPen(pen)
+        p.drawLine(4, 4, 12, 12)
+        p.drawLine(12, 4, 4, 12)
+    elif kind == "arrow_left":
+        pen.setWidth(2)
+        p.setPen(pen)
+        p.drawLine(10, 3, 6, 8)
+        p.drawLine(6, 8, 10, 13)
+    elif kind == "arrow_right":
+        pen.setWidth(2)
+        p.setPen(pen)
+        p.drawLine(6, 3, 10, 8)
+        p.drawLine(10, 8, 6, 13)
+    p.end()
+    return QIcon(pix)
+
+
+def _card(title=None):
+    frame = QFrame()
+    frame.setObjectName("Card")
+    frame.setStyleSheet(
+        f"""
+        QFrame#Card {{
+            background: {C['surface']};
+            border: 1px solid {C['border']};
+            border-radius: 14px;
+        }}
+        """
+    )
+    if title is None:
+        return frame
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(14, 14, 14, 14)
+    layout.setSpacing(10)
+    layout.addWidget(_mk_label(title, bold=True, color=C["subtle"]))
+    return frame
+
+
+class ClickableCard(QFrame):
+    clicked = Signal()
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.overrideredirect(True)
-        self.configure(bg=C["surface"])
-        self._result = None
-        self._view   = initial or datetime.date.today()
-        self._sel    = initial
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self._selected = False
 
-        self._build()
-        self._render()
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
-        self.update_idletasks()
-        x, y = _popup_xy(anchor_widget)
-        self.geometry(f"+{x}+{y}")
-        self.lift()
 
-        self.grab_set()
-        self.bind("<Button-1>", self._on_click)
-        self.bind("<Escape>",   lambda _: self._close())
+class FilterDropdown(QFrame):
+    def __init__(self, items, parent=None):
+        super().__init__(parent)
+        self.setObjectName("FilterDropdown")
+        self._build(items)
 
-    def _build(self):
-        nav = tk.Frame(self, bg=C["header"])
-        nav.pack(fill="x")
-        for side, txt, cmd in [("left", "◀", self._prev), ("right", "▶", self._next)]:
-            tk.Button(nav, text=txt, bg=C["header"], fg="white", relief="flat",
-                      bd=0, padx=8, font=(F["family"], 11, "bold"),
-                      activebackground=C["accent_h"], activeforeground="white",
-                      command=cmd).pack(side=side, pady=5)
-        self._hdr = tk.Label(nav, text="", bg=C["header"], fg="white",
-                             font=(F["family"], 11, "bold"), width=18)
-        self._hdr.pack(side="left", expand=True)
+    def _build(self, items):
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.setStyleSheet(
+            f"""
+            QFrame#FilterDropdown {{
+                background: {C['entry_bg']};
+                border: 1px solid {C['border']};
+                border-radius: 10px;
+            }}
+            """
+        )
 
-        dow = tk.Frame(self, bg=C["panel"])
-        dow.pack(fill="x")
-        for i, d in enumerate(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]):
-            tk.Label(dow, text=d, width=4, bg=C["panel"], fg=C["subtle"],
-                     font=(F["family"], 9, "bold")).grid(row=0, column=i, padx=3, pady=3)
+        self.combo = QComboBox(self)
+        self.combo.addItems(items)
+        self.combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.combo.setStyleSheet(self.combo.styleSheet() + """
+            QComboBox {
+                background: transparent;
+                border: none;
+                padding: 6px 8px 6px 8px;
+            }
+        """)
+        lay.addWidget(self.combo, 1)
+        arrow = QLabel("▾", self)
+        arrow.setAlignment(Qt.AlignCenter)
+        arrow.setFixedWidth(18)
+        arrow.setStyleSheet(f"color: {C['subtle']}; background: transparent;")
+        lay.addWidget(arrow)
 
-        self._grid = tk.Frame(self, bg=C["surface"])
-        self._grid.pack(padx=6, pady=4)
+        self.currentTextChanged = self.combo.currentTextChanged
 
-        foot = tk.Frame(self, bg=C["surface"])
-        foot.pack(fill="x", pady=(0, 6))
-        tk.Button(foot, text="Today", bg=C["panel"], fg=C["text"], relief="flat",
-                  font=(F["family"], 9), activebackground=C["border"],
-                  command=self._pick_today).pack()
+    def currentText(self):
+        return self.combo.currentText()
 
-    def _render(self):
-        for w in self._grid.winfo_children():
-            w.destroy()
-        y, m  = self._view.year, self._view.month
+    def setCurrentText(self, text):
+        self.combo.setCurrentText(text)
+
+    def blockSignals(self, block):
+        return self.combo.blockSignals(block)
+
+    def addItems(self, items):
+        self.combo.addItems(items)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.combo.showPopup()
+        super().mousePressEvent(event)
+
+
+def _metric_card(title, value="", accent=None):
+    card = ClickableCard()
+    card.setObjectName("MetricCard")
+    card.setStyleSheet(
+        f"""
+        QFrame#MetricCard {{
+            background: {C['surface']};
+            border: 1px solid {C['border']};
+            border-radius: 14px;
+        }}
+        QFrame#MetricCard:hover {{
+            background: {C['sel']};
+            border: 1px solid {C['accent']};
+        }}
+        QFrame#MetricCard[selected="true"] {{
+            background: {C['sel']};
+            border: 1px solid {C['accent']};
+        }}
+        """
+    )
+    lay = QVBoxLayout(card)
+    lay.setContentsMargins(16, 16, 16, 16)
+    lay.setSpacing(4)
+    title_lbl = _mk_label(title, bold=True, color=C["subtle"])
+    value_lbl = _mk_label(value, bold=True)
+    value_lbl.setStyleSheet(f"font-size: 18pt; color: {accent or C['text']};")
+    lay.addWidget(title_lbl)
+    lay.addWidget(value_lbl)
+    lay.addStretch(1)
+    card._value_label = value_lbl
+    return card
+
+
+class CalendarDialog(QDialog):
+    def __init__(self, parent=None, initial=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Date")
+        self.setModal(True)
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.result_date = None
+        self._build(initial)
+
+    def _build(self, initial):
+        self.setStyleSheet(_stylesheet())
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(10)
+
+        self.calendar = QCalendarWidget(self)
+        self.calendar.setGridVisible(True)
+        self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        self.calendar.setNavigationBarVisible(False)
+        self.calendar.setStyleSheet(
+            f"""
+            QCalendarWidget {{
+                background: {C['surface']};
+                color: {C['text']};
+                border: 1px solid {C['border']};
+                border-radius: 12px;
+            }}
+            QCalendarWidget QWidget {{
+                alternate-background-color: {C['surface']};
+            }}
+            QCalendarWidget QMenu {{
+                background: {C['surface']};
+                color: {C['text']};
+                border: 1px solid {C['border']};
+            }}
+            QCalendarWidget QSpinBox {{
+                background: {C['entry_bg']};
+                color: {C['text']};
+                border: 1px solid {C['border']};
+                border-radius: 8px;
+                padding: 2px 6px;
+            }}
+            QCalendarWidget QAbstractItemView {{
+                selection-background-color: {C['accent']};
+                selection-color: #101828;
+                background: {C['surface']};
+                color: {C['text']};
+                border: none;
+                outline: 0;
+            }}
+            QCalendarWidget QAbstractItemView:enabled {{
+                gridline-color: {C['border']};
+            }}
+            QCalendarWidget QAbstractItemView::item:selected {{
+                background: {C['accent']};
+                color: #101828;
+            }}
+            QCalendarWidget QAbstractItemView::item:hover {{
+                background: {C['sel']};
+            }}
+            QCalendarWidget QAbstractItemView:disabled {{
+                color: {C['subtle']};
+            }}
+            """
+        )
+        weekend_fmt = QTextCharFormat()
+        weekend_fmt.setForeground(QColor(C["accent"]))
+        self.calendar.setWeekdayTextFormat(Qt.DayOfWeek.Saturday, weekend_fmt)
+        self.calendar.setWeekdayTextFormat(Qt.DayOfWeek.Sunday, weekend_fmt)
+
         today = datetime.date.today()
-        self._hdr.config(text=f"{calendar.month_name[m]}  {y}")
-        for r, week in enumerate(calendar.monthcalendar(y, m)):
-            for cc, day in enumerate(week):
-                if day == 0:
-                    tk.Label(self._grid, text="", width=4, bg=C["surface"]
-                             ).grid(row=r, column=cc, padx=2, pady=2)
-                    continue
-                d   = datetime.date(y, m, day)
-                sel = d == self._sel
-                tod = d == today
-                bg  = C["accent"] if sel else (C["sel"] if tod else C["surface"])
-                fg  = "white" if sel else C["text"]
-                fw  = "bold"  if sel or tod else "normal"
-                tk.Button(self._grid, text=str(day), width=4, bg=bg, fg=fg,
-                          relief="flat", bd=0, font=(F["family"], 10, fw),
-                          activebackground=C["accent"], activeforeground="white",
-                          command=lambda dd=d: self._pick(dd)
-                          ).grid(row=r, column=cc, padx=2, pady=2)
+        current_year = today.year
+        initial_date = None
+        if initial:
+            initial_date = QDate(initial.year, initial.month, initial.day)
+        else:
+            initial_date = QDate(today.year, today.month, today.day)
+        self.calendar.setSelectedDate(initial_date)
+        self.calendar.setCurrentPage(initial_date.year(), initial_date.month())
 
-    def _on_click(self, event):
-        wx, wy = self.winfo_rootx(), self.winfo_rooty()
-        ww, wh = self.winfo_width(),  self.winfo_height()
-        if not (wx <= event.x_root <= wx + ww and wy <= event.y_root <= wy + wh):
-            self._close()
+        header = QFrame(self)
+        header.setObjectName("CalendarHeader")
+        header.setStyleSheet(
+            f"""
+            QFrame#CalendarHeader {{
+                background: {C['surface_2']};
+                border: 1px solid {C['border']};
+                border-radius: 12px;
+            }}
+            """
+        )
+        header_lay = QHBoxLayout(header)
+        header_lay.setContentsMargins(10, 8, 10, 8)
+        header_lay.setSpacing(8)
 
-    def _pick(self, d):
-        self._result = d.strftime("%Y-%m-%d")
-        self._close()
+        def nav_btn(text, on_click):
+            btn = QToolButton(self)
+            btn.setText(text)
+            btn.setFixedSize(28, 28)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(on_click)
+            btn.setStyleSheet(
+                f"""
+                QToolButton {{
+                    background: {C['accent']};
+                    color: #101828;
+                    border: none;
+                    border-radius: 9px;
+                    font-size: 13pt;
+                    font-weight: 700;
+                }}
+                QToolButton:hover {{
+                    background: {C['accent_h']};
+                    color: white;
+                }}
+                """
+            )
+            return btn
+
+        self.prev_btn = nav_btn("‹", self._prev_month)
+        self.next_btn = nav_btn("›", self._next_month)
+
+        self.month_combo = QComboBox(self)
+        self.month_combo.addItems([calendar.month_name[i] for i in range(1, 13)])
+        self.month_combo.setCurrentIndex(initial_date.month() - 1)
+        self.month_combo.currentIndexChanged.connect(self._jump_to_page)
+
+        self.year_combo = QComboBox(self)
+        self.year_combo.addItems([str(y) for y in range(current_year - 20, current_year + 21)])
+        year_index = self.year_combo.findText(str(initial_date.year()))
+        if year_index >= 0:
+            self.year_combo.setCurrentIndex(year_index)
+        self.year_combo.currentIndexChanged.connect(self._jump_to_page)
+
+        for btn, kind in ((self.prev_btn, "arrow_left"), (self.next_btn, "arrow_right")):
+            btn.setText("")
+            btn.setIcon(_draw_icon(kind, "#101828"))
+            btn.setIconSize(QSize(14, 14))
+            btn.setFixedSize(30, 30)
+
+        self.month_combo.setFixedWidth(120)
+        self.year_combo.setFixedWidth(92)
+        self.month_combo.setCursor(Qt.PointingHandCursor)
+        self.year_combo.setCursor(Qt.PointingHandCursor)
+
+        month_wrap = QWidget(self)
+        month_lay = QHBoxLayout(month_wrap)
+        month_lay.setContentsMargins(0, 0, 0, 0)
+        month_lay.setSpacing(6)
+        month_lay.addWidget(self.month_combo)
+        month_lay.addWidget(self.year_combo)
+
+        header_lay.addWidget(self.prev_btn)
+        header_lay.addWidget(month_wrap)
+        header_lay.addStretch(1)
+        header_lay.addWidget(self.next_btn)
+
+        self.calendar.currentPageChanged.connect(self._sync_header)
+        self._sync_header(initial_date.year(), initial_date.month())
+
+        lay.addWidget(header)
+        self.calendar.clicked.connect(self._choose)
+        lay.addWidget(self.calendar)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(_mk_button("Today", self._pick_today, outline=True, width=80))
+        row.addWidget(_mk_button("Cancel", self.reject, outline=True, width=80))
+        lay.addLayout(row)
+
+    def _choose(self, qdate):
+        self.result_date = qdate.toPython().strftime("%Y-%m-%d")
+        self.accept()
 
     def _pick_today(self):
-        self._result = datetime.date.today().strftime("%Y-%m-%d")
-        self._close()
+        self.result_date = datetime.date.today().strftime("%Y-%m-%d")
+        self.accept()
 
-    def _close(self):
-        self.grab_release()
-        self.destroy()
+    def _sync_header(self, year, month):
+        with QSignalBlocker(self.month_combo), QSignalBlocker(self.year_combo):
+            self.month_combo.setCurrentIndex(month - 1)
+            year_index = self.year_combo.findText(str(year))
+            if year_index >= 0:
+                self.year_combo.setCurrentIndex(year_index)
 
-    def _prev(self):
-        y, m = self._view.year, self._view.month - 1
-        if m == 0: m, y = 12, y - 1
-        self._view = datetime.date(y, m, 1); self._render()
+    def _jump_to_page(self):
+        self.calendar.setCurrentPage(self.year_combo.currentText().__int__() if False else int(self.year_combo.currentText()), self.month_combo.currentIndex() + 1)
 
-    def _next(self):
-        y, m = self._view.year, self._view.month + 1
-        if m == 13: m, y = 1, y + 1
-        self._view = datetime.date(y, m, 1); self._render()
+    def _prev_month(self):
+        year = self.calendar.yearShown()
+        month = self.calendar.monthShown() - 1
+        if month < 1:
+            month = 12
+            year -= 1
+        self.calendar.setCurrentPage(year, month)
 
-    def result(self):
-        return self._result
+    def _next_month(self):
+        year = self.calendar.yearShown()
+        month = self.calendar.monthShown() + 1
+        if month > 12:
+            month = 1
+            year += 1
+        self.calendar.setCurrentPage(year, month)
+
+    def _jump_to_page(self, *_):
+        self.calendar.setCurrentPage(int(self.year_combo.currentText()), self.month_combo.currentIndex() + 1)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  DATE FIELD
-# ══════════════════════════════════════════════════════════════════════════════
-class DateField(ctk.CTkFrame):
-    def __init__(self, master, initial=None, nullable=False, **kw):
-        super().__init__(master, fg_color="transparent", **kw)
-        self._val      = initial or ("" if nullable else datetime.date.today().strftime("%Y-%m-%d"))
-        self._var      = tk.StringVar(value=_fmt_date(self._val))
+class DateFieldWidget(QWidget):
+    def __init__(self, parent=None, initial=None, nullable=False):
+        super().__init__(parent)
         self._nullable = nullable
+        self._value = initial or ""
+        if not self._value and not nullable:
+            self._value = datetime.date.today().strftime("%Y-%m-%d")
+        self._build()
+        self.set_value(self._value)
 
-        ctk.CTkEntry(self, textvariable=self._var, state="readonly", width=116,
-                     fg_color=C["entry_bg"], text_color=C["text"],
-                     border_color=C["border"], corner_radius=8).pack(side="left")
-        self._cal_btn = ctk.CTkButton(self, text="📅", width=32, corner_radius=8,
-                                      fg_color=C["accent"], hover_color=C["accent_h"],
-                                      command=self._open)
-        self._cal_btn.pack(side="left", padx=(4, 0))
-        if nullable:
-            ctk.CTkButton(self, text="✕", width=26, corner_radius=8,
-                          fg_color=C["panel"], hover_color=C["border"],
-                          text_color=C["text"],
-                          command=self._clear).pack(side="left", padx=(2, 0))
+    def _build(self):
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
 
-    def _open(self):
-        try:
-            init = datetime.datetime.strptime(self._val, "%Y-%m-%d").date() if self._val else None
-        except ValueError:
-            init = None
-        popup = CalendarPopup(self, anchor_widget=self._cal_btn, initial=init)
-        self.wait_window(popup)
-        if popup.result():
-            self._val = popup.result()
-            self._var.set(_fmt_date(self._val))
+        self.edit = QLineEdit(self)
+        self.edit.setReadOnly(True)
+        self.edit.setMinimumWidth(0)
+        self.edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        lay.addWidget(self.edit)
 
-    def _clear(self):
-        self._val = ""; self._var.set("")
+        self.btn_cal = QToolButton(self)
+        self.btn_cal.setIcon(_draw_icon("calendar", "#ffffff"))
+        self.btn_cal.setIconSize(QSize(16, 16))
+        self.btn_cal.setFixedSize(30, 30)
+        self.btn_cal.clicked.connect(self.open_calendar)
+        lay.addWidget(self.btn_cal)
 
-    def get(self):    return self._val
-    def set(self, v): self._val = v; self._var.set(v)
+        if self._nullable:
+            self.btn_clear = QToolButton(self)
+            self.btn_clear.setIcon(_draw_icon("clear", "#ffffff"))
+            self.btn_clear.setIconSize(QSize(14, 14))
+            self.btn_clear.setFixedSize(30, 30)
+            self.btn_clear.clicked.connect(self.clear_value)
+            lay.addWidget(self.btn_clear)
+        else:
+            self.btn_clear = None
+
+    def set_value(self, value):
+        self._value = value or ""
+        self.edit.setText(_fmt_display_date(self._value))
+
+    def clear_value(self):
+        if self._nullable:
+            self.set_value("")
+
+    def open_calendar(self):
+        initial = _parse_iso_date(self._value)
+        dlg = CalendarDialog(self, initial=initial)
+        if dlg.exec() == QDialog.Accepted and dlg.result_date:
+            self.set_value(dlg.result_date)
+
+    def get(self):
+        return self._value
+
+    def set(self, value):
+        self.set_value(value)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  COPY-PASTE TEXT GENERATOR
-# ══════════════════════════════════════════════════════════════════════════════
-class CopyPasteDialog(ctk.CTkToplevel):
+class CopyPasteDialog(QDialog):
     def __init__(self, parent, system_number, issue_desc, sps_number):
         super().__init__(parent)
-        self.title("Copy-Paste Text")
-        self.grab_set()
-        self.configure(fg_color=C["bg"])
+        self.setWindowTitle("Copy-Paste Text")
+        self.setModal(True)
+        self.resize(640, 520)
         self._build(system_number, issue_desc, sps_number)
 
     def _build(self, sys_num, desc, sps_num):
+        self.setStyleSheet(_stylesheet())
         systems_block = sys_num.strip()
         email_text = (
             f"Hi KB / Zach,\n\n"
@@ -1162,743 +1137,1209 @@ class CopyPasteDialog(ctk.CTkToplevel):
             f"Best regards,"
         )
         desc_of_def = f"{systems_block}\n\n{desc}"
-        det_dispos  = f"AMAT SPS {sps_num} submitted."
+        det_dispos = f"AMAT SPS {sps_num} submitted."
 
-        outer = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
-        outer.pack(fill="both", expand=True, padx=10, pady=10)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(12)
 
-        def _block(title, content, h=120):
-            _lbl(outer, title, bold=True, size=F["size_sm"], color=C["header"]
-                 ).pack(anchor="w", padx=18, pady=(14, 2))
-            tb = _textbox(outer, h=h)
-            tb.pack(fill="x", padx=18)
-            tb.insert("1.0", content)
-            def _copy():
-                self.clipboard_clear()
-                self.clipboard_append(tb.get("1.0", "end").rstrip())
-                btn.configure(text="Copied ✓")
-                self.after(1500, lambda: btn.configure(text="Copy"))
-            btn = _btn(outer, "Copy", _copy, outline=True, width=80, radius=7)
-            btn.pack(anchor="e", padx=18, pady=(3, 0))
+        def block(title, content, h):
+            outer.addWidget(_mk_label(title, bold=True, color=C["header"]))
+            tb = QPlainTextEdit(self)
+            tb.setPlainText(content)
+            tb.setReadOnly(True)
+            tb.setFixedHeight(h)
+            outer.addWidget(tb)
+            row = QHBoxLayout()
+            row.addStretch(1)
+            btn = _mk_button("Copy", lambda: self._copy_text(tb.toPlainText(), btn), outline=True, width=80)
+            row.addWidget(btn)
+            outer.addLayout(row)
 
-        _block("📧  Email body",                            email_text,  h=170)
-        _block("📋  NCR — Desc. of Def. / Req. for Change", desc_of_def, h=140)
-        _block("📋  NCR — Det. Dispos. / Reas. for Change", det_dispos,  h=60)
+        block("Email body", email_text, 170)
+        block("NCR - Desc. of Def. / Req. for Change", desc_of_def, 130)
+        block("NCR - Det. Dispos. / Reas. for Change", det_dispos, 80)
 
-        self.update_idletasks()
-        height = outer.winfo_reqheight() + 60
-        self.geometry(f"640x{height}")
-        self.resizable(False, False)
+    def _copy_text(self, text, btn):
+        QApplication.clipboard().setText(text.rstrip())
+        btn.setText("Copied")
+        QTimer.singleShot(1200, lambda: btn.setText("Copy"))
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  NEW ISSUE DIALOG
-# ══════════════════════════════════════════════════════════════════════════════
-class NewIssueDialog(ctk.CTkToplevel):
+class NewIssueDialog(QDialog):
     def __init__(self, parent, tracker_type="Engineering"):
         super().__init__(parent)
         self.tracker_type = tracker_type
-        self.title(f"Log New {tracker_type} Issue")
-        self.geometry("640x750")
-        self.resizable(False, True)
-        self.grab_set()
-        self.configure(fg_color=C["bg"])
+        self.setWindowTitle(f"Log New {tracker_type} Issue")
+        self.resize(640, 760)
+        self.setMinimumWidth(620)
+        self.setModal(True)
         self._build()
 
     def _build(self):
-        self.grid_columnconfigure(1, weight=1)
-        P = dict(padx=22, pady=4)
+        self.setStyleSheet(_stylesheet())
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 18, 22, 18)
+        lay.setSpacing(10)
+        field_w = 520
+
+        lay.addWidget(_mk_label(f"New {self.tracker_type} Issue", bold=True))
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(10)
+        form.setColumnStretch(0, 0)
+        form.setColumnStretch(1, 1)
+        lay.addLayout(form)
+
         r = 0
+        form.addWidget(_mk_label("Date Reported *"), r, 0, alignment=Qt.AlignLeft)
+        self.dt = DateFieldWidget(self)
+        _set_field_width(self.dt, field_w)
+        form.addWidget(self.dt, r, 1)
 
-        _lbl(self, f"New {self.tracker_type} Issue", bold=True, size=F["size_xl"]).grid(
-            row=r, column=0, columnspan=2, padx=22, pady=(18, 10), sticky="w"); r += 1
+        r += 1
+        form.addWidget(_mk_label("System Number(s) *"), r, 0, alignment=Qt.AlignTop)
+        sys_box = QVBoxLayout()
+        sys_box.setContentsMargins(0, 0, 0, 0)
+        sys_box.setSpacing(4)
+        self.sys = QPlainTextEdit(self)
+        self.sys.setFixedHeight(60)
+        _set_field_width(self.sys, field_w)
+        sys_box.addWidget(self.sys)
+        sys_hint = _mk_label("One system per line for multiple systems.", color=C["subtle"])
+        sys_hint.setWordWrap(True)
+        sys_hint.setMaximumWidth(field_w)
+        sys_box.addWidget(sys_hint)
+        sys_wrap = QWidget()
+        sys_wrap.setLayout(sys_box)
+        form.addWidget(sys_wrap, r, 1)
 
-        _lbl(self, "Date Reported *").grid(row=r, column=0, **P, sticky="w")
-        self.dt = DateField(self)
-        self.dt.grid(row=r, column=1, **P, sticky="w"); r += 1
+        r += 1
+        form.addWidget(_mk_label("Product Family *"), r, 0)
+        self.fam = QComboBox(self)
+        self.fam.addItems(FAMILIES)
+        _set_field_width(self.fam, field_w)
+        form.addWidget(self.fam, r, 1)
 
-        _lbl(self, "System Number(s) *").grid(row=r, column=0, **P, sticky="nw")
-        sf = ctk.CTkFrame(self, fg_color="transparent")
-        sf.grid(row=r, column=1, **P, sticky="ew")
-        self.sys = _textbox(sf, h=60); self.sys.pack(fill="x")
-        _lbl(sf, "One system per line for multiple systems.",
-             size=F["size_sm"]-1, color=C["subtle"]).pack(anchor="w", pady=(1, 0)); r += 1
-
-        _lbl(self, "Product Family *").grid(row=r, column=0, **P, sticky="w")
-        self.fam = ctk.StringVar(value=FAMILIES[0])
-        _optmenu(self, FAMILIES, self.fam).grid(row=r, column=1, **P, sticky="ew"); r += 1
-
-        _lbl(self, "Issue Type *").grid(row=r, column=0, **P, sticky="w")
-
-        # Default to "Request for Deviation" for Material, "BOM Error" for Engineering
+        r += 1
+        form.addWidget(_mk_label("Issue Type *"), r, 0)
+        self.ityp = QComboBox(self)
+        self.ityp.addItems(ISSUE_TYPES)
         default_issue_type = "Request for Deviation" if self.tracker_type == "Material" else ISSUE_TYPES[0]
-        self.ityp = ctk.StringVar(value=default_issue_type)
+        self.ityp.setCurrentText(default_issue_type)
+        _set_field_width(self.ityp, field_w)
+        form.addWidget(self.ityp, r, 1)
 
-        _optmenu(self, ISSUE_TYPES, self.ityp).grid(row=r, column=1, **P, sticky="ew"); r += 1
+        r += 1
+        form.addWidget(_mk_label("Issue Description *"), r, 0, alignment=Qt.AlignTop)
+        desc_box = QVBoxLayout()
+        desc_box.setContentsMargins(0, 0, 0, 0)
+        desc_box.setSpacing(4)
+        self.desc = QPlainTextEdit(self)
+        self.desc.setFixedHeight(130)
+        _set_field_width(self.desc, field_w)
+        desc_box.addWidget(self.desc)
+        desc_hint = _mk_label("Separate multiple issues with a blank line.", color=C["subtle"])
+        desc_hint.setWordWrap(True)
+        desc_hint.setMaximumWidth(field_w)
+        desc_box.addWidget(desc_hint)
+        desc_wrap = QWidget()
+        desc_wrap.setLayout(desc_box)
+        form.addWidget(desc_wrap, r, 1)
 
-        _lbl(self, "Issue Description *").grid(row=r, column=0, **P, sticky="nw")
-        df = ctk.CTkFrame(self, fg_color="transparent")
-        df.grid(row=r, column=1, **P, sticky="ew")
-        self.desc = _textbox(df, h=130); self.desc.pack(fill="x")
-        _lbl(df, "Separate multiple issues with a blank line.",
-             size=F["size_sm"]-1, color=C["subtle"]).pack(anchor="w", pady=(1, 0)); r += 1
+        r += 1
+        form.addWidget(_mk_label("SPS Number *"), r, 0)
+        self.sps = QLineEdit(self)
+        self.sps.setPlaceholderText("e.g. 752766")
+        _set_field_width(self.sps, field_w)
+        form.addWidget(self.sps, r, 1)
 
-        _lbl(self, "SPS Number *").grid(row=r, column=0, **P, sticky="w")
-        self.sps = _entry(self, "e.g. 752766")
-        self.sps.grid(row=r, column=1, **P, sticky="ew"); r += 1
+        r += 1
+        form.addWidget(_mk_label("NCR Number"), r, 0)
+        self.ncr = QLineEdit(self)
+        self.ncr.setPlaceholderText("e.g. NCR281174 (fill after creating in Agile)")
+        _set_field_width(self.ncr, field_w)
+        form.addWidget(self.ncr, r, 1)
 
-        _lbl(self, "NCR Number").grid(row=r, column=0, **P, sticky="w")
-        self.ncr = _entry(self, "e.g. NCR281174  (fill after creating in Agile)")
-        self.ncr.grid(row=r, column=1, **P, sticky="ew"); r += 1
-
-        bf = ctk.CTkFrame(self, fg_color="transparent")
-        bf.grid(row=r, column=0, columnspan=2, pady=18)
-        _btn(bf, "Cancel",                   self.destroy,    outline=True, width=90
-             ).pack(side="left", padx=6)
-        _btn(bf, "Generate Copy-Paste Text", self._generate,
-             color=C["subtle"], width=210).pack(side="left", padx=6)
-        _btn(bf, "Submit",                   self._submit,    width=120
-             ).pack(side="left", padx=6)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        buttons.addWidget(_mk_button("Cancel", self.reject, outline=True, width=90))
+        buttons.addWidget(_mk_button("Generate Copy-Paste Text", self._generate, color=C["subtle"], width=210))
+        buttons.addWidget(_mk_button("Submit", self._submit, width=120))
+        lay.addLayout(buttons)
 
     def _generate(self):
-        CopyPasteDialog(self,
-                        self.sys.get("1.0", "end").strip(),
-                        self.desc.get("1.0", "end").strip(),
-                        self.sps.get().strip())
+        dlg = CopyPasteDialog(self, self.sys.toPlainText().strip(), self.desc.toPlainText().strip(), self.sps.text().strip())
+        dlg.exec()
 
     def _submit(self):
-        d    = self.dt.get().strip()
-        s    = self.sys.get("1.0", "end").strip()
-        desc = self.desc.get("1.0", "end").strip()
-        sps  = self.sps.get().strip()
+        d = self.dt.get().strip()
+        s = self.sys.toPlainText().strip()
+        desc = self.desc.toPlainText().strip()
+        sps = self.sps.text().strip()
         if not all([d, s, desc, sps]):
-            messagebox.showerror("Missing Fields",
-                                 "Date Reported, System Number, Issue Description "
-                                 "and SPS Number are required.", parent=self)
+            QMessageBox.critical(self, "Missing Fields", "Date Reported, System Number, Issue Description and SPS Number are required.")
             return
-        insert_issue(d, s, self.fam.get(), self.ityp.get(), desc,
-                     sps, self.ncr.get().strip(), self.tracker_type)
-        self.destroy()
+        insert_issue(d, s, self.fam.currentText(), self.ityp.currentText(), desc, sps, self.ncr.text().strip(), self.tracker_type)
+        self.accept()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MANAGE / EDIT DIALOG
-# ══════════════════════════════════════════════════════════════════════════════
-class ManageDialog(ctk.CTkToplevel):
+class ManageDialog(QDialog):
     def __init__(self, parent, db_id):
         super().__init__(parent)
         self.db_id = db_id
-        self.title("Edit Issue")
-        self.geometry("720x880")
-        self.resizable(True, True)
-        self.grab_set()
-        self.configure(fg_color=C["bg"])
         self.R = fetch_by_id(db_id)
+        self.setWindowTitle("Edit Issue")
+        self.resize(720, 880)
+        self.setModal(True)
         self._build()
 
     def _build(self):
-        sf = ctk.CTkScrollableFrame(self, fg_color=C["bg"], corner_radius=0,
-                                    scrollbar_button_color=C["accent"],
-                                    scrollbar_button_hover_color=C["accent_h"])
-        sf.pack(fill="both", expand=True)
-        sf.grid_columnconfigure(1, weight=1)
-        P = dict(padx=22, pady=4)
-        R = self.R; r = 0
+        self.setStyleSheet(_stylesheet())
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        field_w = 520
+        label_w = 125
 
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(22, 18, 22, 18)
+        lay.setSpacing(10)
+
+        R = self.R
         title_sys = R["system_number"].splitlines()[0] if R["system_number"] else ""
         tracker_type = R.get("tracker_type", "Engineering")
-        _lbl(sf, f"{tracker_type} Issue — {title_sys}", bold=True, size=F["size_lg"]).grid(
-            row=r, column=0, columnspan=2, padx=22, pady=(16, 2), sticky="w"); r += 1
-        _lbl(sf, f"Created: {R['created_at']}", size=F["size_sm"], color=C["subtle"]).grid(
-            row=r, column=0, columnspan=2, padx=22, sticky="w"); r += 1
+        lay.addWidget(_mk_label(f"{tracker_type} Issue - {title_sys}", bold=True))
+        created = _mk_label(f"Created: {R['created_at']}", color=C["subtle"])
+        lay.addWidget(created)
 
-        _section_bar(sf, "Basic Information", r); r += 1
+        form = QGridLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(10)
+        form.setColumnStretch(0, 0)
+        form.setColumnStretch(1, 1)
+        form.setColumnMinimumWidth(0, label_w)
+        lay.addLayout(form)
 
-        _lbl(sf, "Date Reported").grid(row=r, column=0, **P, sticky="w")
-        self.dt = DateField(sf, initial=R["date_reported"])
-        self.dt.grid(row=r, column=1, **P, sticky="w"); r += 1
+        r = 0
 
-        _lbl(sf, "System Number(s)").grid(row=r, column=0, **P, sticky="nw")
-        sys_f = ctk.CTkFrame(sf, fg_color="transparent")
-        sys_f.grid(row=r, column=1, **P, sticky="ew")
-        self.sys = _textbox(sys_f, h=60); self.sys.pack(fill="x")
-        self.sys.insert("1.0", R["system_number"])
-        _lbl(sys_f, "One system per line for multiple systems.",
-             size=F["size_sm"]-1, color=C["subtle"]).pack(anchor="w", pady=(1, 0)); r += 1
+        def section(title, row_idx):
+            bar = QFrame(self)
+            bar.setObjectName("HeaderBar")
+            bar.setStyleSheet(f"background: {C['header']};")
+            bar.setFixedHeight(24)
+            bar_row = QHBoxLayout(bar)
+            bar_row.setContentsMargins(8, 2, 8, 2)
+            bar_row.addWidget(_mk_label(title, bold=True, color="white"))
+            form.addWidget(bar, row_idx, 0, 1, 2)
+            return row_idx + 1
 
-        _lbl(sf, "Product Family").grid(row=r, column=0, **P, sticky="w")
-        self.fam = ctk.StringVar(value=R["product_family"])
-        _optmenu(sf, FAMILIES, self.fam).grid(row=r, column=1, **P, sticky="ew"); r += 1
+        r = section("Basic Information", r)
 
-        _lbl(sf, "Issue Type").grid(row=r, column=0, **P, sticky="w")
-        self.ityp = ctk.StringVar(value=R["issue_type"])
-        _optmenu(sf, ISSUE_TYPES, self.ityp).grid(row=r, column=1, **P, sticky="ew"); r += 1
+        form.addWidget(_mk_label("Date Reported"), r, 0)
+        self.dt = DateFieldWidget(self, initial=R["date_reported"])
+        _set_field_width(self.dt, field_w)
+        form.addWidget(self.dt, r, 1)
 
-        _lbl(sf, "Issue Description").grid(row=r, column=0, **P, sticky="nw")
-        df = ctk.CTkFrame(sf, fg_color="transparent")
-        df.grid(row=r, column=1, **P, sticky="ew")
-        self.desc = _textbox(df, h=100); self.desc.pack(fill="x")
-        self.desc.insert("1.0", R["issue_desc"])
-        _lbl(df, "Separate multiple issues with a blank line.",
-             size=F["size_sm"]-1, color=C["subtle"]).pack(anchor="w", pady=(1, 0)); r += 1
-
-        _lbl(sf, "SPS Number").grid(row=r, column=0, **P, sticky="w")
-        self.sps = _entry(sf); self.sps.insert(0, R["sps_number"])
-        self.sps.grid(row=r, column=1, **P, sticky="ew"); r += 1
-
-        _lbl(sf, "NCR Number").grid(row=r, column=0, **P, sticky="w")
-        self.ncr = _entry(sf); self.ncr.insert(0, R["ncr_number"])
-        self.ncr.grid(row=r, column=1, **P, sticky="ew"); r += 1
-
-        _lbl(sf, "Status").grid(row=r, column=0, **P, sticky="w")
-        self.status = ctk.StringVar(value=R["status"])
-        rf = ctk.CTkFrame(sf, fg_color="transparent")
-        rf.grid(row=r, column=1, **P, sticky="w")
-        for v, col in [("Open", C["open"]), ("Clarification", C["clarif"]), ("Closed", C["closed"])]:
-            ctk.CTkRadioButton(rf, text=v, value=v, variable=self.status,
-                               fg_color=col, hover_color=col, text_color=C["text"],
-                               corner_radius=50, font=_font(size=F["size_md"])
-                               ).pack(side="left", padx=10)
         r += 1
+        form.addWidget(_mk_label("System Number(s)"), r, 0, alignment=Qt.AlignTop)
+        sys_box = QVBoxLayout()
+        sys_box.setContentsMargins(0, 0, 0, 0)
+        sys_box.setSpacing(4)
+        self.sys = QPlainTextEdit(self)
+        self.sys.setFixedHeight(60)
+        _set_field_width(self.sys, field_w)
+        self.sys.setPlainText(R["system_number"] or "")
+        sys_box.addWidget(self.sys)
+        sys_hint = _mk_label("One system per line for multiple systems.", color=C["subtle"])
+        sys_hint.setWordWrap(True)
+        sys_hint.setMaximumWidth(field_w)
+        sys_box.addWidget(sys_hint)
+        sys_wrap = QWidget()
+        sys_wrap.setLayout(sys_box)
+        form.addWidget(sys_wrap, r, 1)
 
-        _section_bar(sf, "Resolution", r); r += 1
+        r += 1
+        form.addWidget(_mk_label("Product Family"), r, 0)
+        self.fam = QComboBox(self)
+        self.fam.addItems(FAMILIES)
+        self.fam.setCurrentText(R["product_family"] or FAMILIES[0])
+        _set_field_width(self.fam, field_w)
+        form.addWidget(self.fam, r, 1)
 
-        _lbl(sf, "Solution").grid(row=r, column=0, **P, sticky="nw")
-        self.sol = _textbox(sf, h=80)
-        self.sol.insert("1.0", R["solution"] or "")
-        self.sol.grid(row=r, column=1, **P, sticky="ew"); r += 1
+        r += 1
+        form.addWidget(_mk_label("Issue Type"), r, 0)
+        self.ityp = QComboBox(self)
+        self.ityp.addItems(ISSUE_TYPES)
+        self.ityp.setCurrentText(R["issue_type"] or ISSUE_TYPES[0])
+        _set_field_width(self.ityp, field_w)
+        form.addWidget(self.ityp, r, 1)
 
-        _lbl(sf, "Solution Date").grid(row=r, column=0, **P, sticky="w")
-        self.sol_dt = DateField(sf, initial=R["solution_date"] or None, nullable=True)
-        self.sol_dt.grid(row=r, column=1, **P, sticky="w"); r += 1
+        r += 1
+        form.addWidget(_mk_label("Issue Description"), r, 0, alignment=Qt.AlignTop)
+        desc_box = QVBoxLayout()
+        desc_box.setContentsMargins(0, 0, 0, 0)
+        desc_box.setSpacing(4)
+        self.desc = QPlainTextEdit(self)
+        self.desc.setFixedHeight(100)
+        _set_field_width(self.desc, field_w)
+        self.desc.setPlainText(R["issue_desc"] or "")
+        desc_box.addWidget(self.desc)
+        desc_hint = _mk_label("Separate multiple issues with a blank line.", color=C["subtle"])
+        desc_hint.setWordWrap(True)
+        desc_hint.setMaximumWidth(field_w)
+        desc_box.addWidget(desc_hint)
+        desc_wrap = QWidget()
+        desc_wrap.setLayout(desc_box)
+        form.addWidget(desc_wrap, r, 1)
 
-        _section_bar(sf, "Change Controls", r); r += 1
-        for attr, label, val in [("crf", "CRF", R["crf"]),
-                                  ("esw", "ESW", R["esw"]),
-                                  ("scv", "SCV", R["scv"])]:
-            _lbl(sf, label).grid(row=r, column=0, **P, sticky="w")
-            e = _entry(sf); e.insert(0, val or "")
-            e.grid(row=r, column=1, **P, sticky="ew")
-            setattr(self, attr, e); r += 1
+        r += 1
+        form.addWidget(_mk_label("SPS Number"), r, 0)
+        self.sps = QLineEdit(self)
+        self.sps.setText(R["sps_number"] or "")
+        _set_field_width(self.sps, field_w)
+        form.addWidget(self.sps, r, 1)
 
-        _section_bar(sf, "Remarks", r); r += 1
-        _lbl(sf, "Remarks").grid(row=r, column=0, **P, sticky="nw")
-        self.rmk = _textbox(sf, h=70)
-        self.rmk.insert("1.0", R["remarks"] or "")
-        self.rmk.grid(row=r, column=1, **P, sticky="ew"); r += 1
+        r += 1
+        form.addWidget(_mk_label("NCR Number"), r, 0)
+        self.ncr = QLineEdit(self)
+        self.ncr.setText(R["ncr_number"] or "")
+        _set_field_width(self.ncr, field_w)
+        form.addWidget(self.ncr, r, 1)
 
-        bb = ctk.CTkFrame(self, fg_color=C["panel"], corner_radius=0, height=52)
-        bb.pack(fill="x", side="bottom"); bb.pack_propagate(False)
-        _btn(bb, "Delete",       self._delete, color="#a02020", width=100, radius=8
-             ).pack(side="left",  padx=14, pady=10)
-        _btn(bb, "Cancel",       self.destroy, outline=True,    width=90,  radius=8
-             ).pack(side="right", padx=8,  pady=10)
-        _btn(bb, "Save Changes", self._save,                    width=150, radius=8
-             ).pack(side="right", padx=8,  pady=10)
+        r += 1
+        form.addWidget(_mk_label("Status"), r, 0)
+        status_row = QHBoxLayout()
+        self.open_rb = QRadioButton("Open")
+        self.clarif_rb = QRadioButton("Clarification")
+        self.closed_rb = QRadioButton("Closed")
+        self.open_rb.setStyleSheet(f"color: {C['open']};")
+        self.clarif_rb.setStyleSheet(f"color: {C['clarif']};")
+        self.closed_rb.setStyleSheet(f"color: {C['closed']};")
+        for rb in (self.open_rb, self.clarif_rb, self.closed_rb):
+            status_row.addSpacing(16)
+            status_row.addWidget(rb)
+        status_row.addStretch(1)
+        current = R["status"] or "Open"
+        if current == "Open":
+            self.open_rb.setChecked(True)
+        elif current == "Clarification":
+            self.clarif_rb.setChecked(True)
+        else:
+            self.closed_rb.setChecked(True)
+        status_wrap = QWidget()
+        status_wrap.setLayout(status_row)
+        _set_field_width(status_wrap, field_w)
+        form.addWidget(status_wrap, r, 1)
+
+        r += 1
+        r = section("Resolution", r)
+
+        form.addWidget(_mk_label("Solution"), r, 0, alignment=Qt.AlignTop)
+        self.sol = QPlainTextEdit(self)
+        self.sol.setFixedHeight(70)
+        _set_field_width(self.sol, field_w)
+        self.sol.setPlainText(R["solution"] or "")
+        sol_wrap = QWidget()
+        sol_lay = QVBoxLayout(sol_wrap)
+        sol_lay.setContentsMargins(0, 0, 0, 0)
+        sol_lay.setSpacing(0)
+        sol_lay.addWidget(self.sol)
+        form.addWidget(sol_wrap, r, 1)
+
+        r += 1
+        form.addWidget(_mk_label("Solution Date"), r, 0)
+        self.sol_dt = DateFieldWidget(self, initial=R["solution_date"] or None, nullable=True)
+        _set_field_width(self.sol_dt, field_w)
+        form.addWidget(self.sol_dt, r, 1)
+
+        self.crf = QLineEdit(self)
+        self.crf.setText(R["crf"] or "")
+        self.esw = QLineEdit(self)
+        self.esw.setText(R["esw"] or "")
+        self.scv = QLineEdit(self)
+        self.scv.setText(R["scv"] or "")
+        r += 1
+        r = section("Change Controls", r)
+        for row_idx, (label, widget) in enumerate([("CRF", self.crf), ("ESW", self.esw), ("SCV", self.scv)]):
+            form.addWidget(_mk_label(label), r + row_idx, 0)
+            _set_field_width(widget, field_w)
+            form.addWidget(widget, r + row_idx, 1)
+
+        r += 3
+        r = section("Remarks", r)
+        form.addWidget(_mk_label("Remarks"), r, 0, alignment=Qt.AlignTop)
+        self.rmk = QPlainTextEdit(self)
+        self.rmk.setFixedHeight(70)
+        _set_field_width(self.rmk, field_w)
+        self.rmk.setPlainText(R["remarks"] or "")
+        rem_wrap = QWidget()
+        rem_lay = QVBoxLayout(rem_wrap)
+        rem_lay.setContentsMargins(0, 0, 0, 0)
+        rem_lay.setSpacing(0)
+        rem_lay.addWidget(self.rmk)
+        form.addWidget(rem_wrap, r, 1)
+
+        lay.addStretch(1)
+
+        footer = QFrame(self)
+        footer.setStyleSheet(f"background: {C['panel']};")
+        footer.setFixedHeight(56)
+        footer_row = QHBoxLayout(footer)
+        footer_row.setContentsMargins(14, 10, 14, 10)
+        footer_row.addWidget(_mk_button("Delete", self._delete, danger=True, width=100))
+        footer_row.addStretch(1)
+        footer_row.addWidget(_mk_button("Cancel", self.reject, outline=True, width=90))
+        footer_row.addWidget(_mk_button("Save Changes", self._save, width=150))
+        outer.addWidget(footer)
 
     def _save(self):
         tracker_type = self.R.get("tracker_type", "Engineering")
-        update_issue(self.db_id,
+        status = "Open"
+        if self.clarif_rb.isChecked():
+            status = "Clarification"
+        elif self.closed_rb.isChecked():
+            status = "Closed"
+        update_issue(
+            self.db_id,
             self.dt.get(),
-            self.sys.get("1.0", "end").strip(),
-            self.fam.get(), self.ityp.get(),
-            self.desc.get("1.0", "end").strip(),
-            self.sps.get().strip(), self.ncr.get().strip(),
-            self.status.get(),
-            self.sol.get("1.0", "end").strip(),
+            self.sys.toPlainText().strip(),
+            self.fam.currentText(),
+            self.ityp.currentText(),
+            self.desc.toPlainText().strip(),
+            self.sps.text().strip(),
+            self.ncr.text().strip(),
+            status,
+            self.sol.toPlainText().strip(),
             self.sol_dt.get(),
-            self.crf.get().strip(), self.esw.get().strip(), self.scv.get().strip(),
-            self.rmk.get("1.0", "end").strip(),
-            tracker_type)
-        messagebox.showinfo("Saved", "Issue updated.", parent=self)
-        self.destroy()
+            self.crf.text().strip(),
+            self.esw.text().strip(),
+            self.scv.text().strip(),
+            self.rmk.toPlainText().strip(),
+            tracker_type,
+        )
+        QMessageBox.information(self, "Saved", "Issue updated.")
+        self.accept()
 
     def _delete(self):
-        if messagebox.askyesno("Delete", "Permanently delete this issue?", parent=self):
-            delete_by_ids([self.db_id]); self.destroy()
+        if QMessageBox.question(
+            self,
+            "Delete",
+            "Permanently delete this issue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
+            delete_by_ids([self.db_id])
+            self.accept()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  TAB CONTENT FRAME
-# ══════════════════════════════════════════════════════════════════════════════
-class TabContentFrame(ctk.CTkFrame):
-    """Container for a single tab's filters, stats, and table."""
-    def __init__(self, parent, tracker_type, on_double_click, on_table_event, on_new_issue, on_mass_delete):
-        super().__init__(parent, fg_color="transparent")
+class IssueTableWidget(QTableWidget):
+    sortRequested = Signal(str)
+    editRequested = Signal(int)
+    deleteRequested = Signal(int)
+    selectionChangedCount = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows = []
+        self._columns = TABLE_COLS
+        self._col_index_by_id = {cid: idx + 1 for idx, (cid, *_rest) in enumerate(self._columns)}
+        self._build()
+
+    def _build(self):
+        self.setColumnCount(1 + len(self._columns))
+        self.setHorizontalHeaderLabels(["#"] + [c[1] for c in self._columns])
+        self.setAlternatingRowColors(True)
+        self.setWordWrap(True)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.verticalHeader().setVisible(False)
+        self.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.horizontalHeader().setSectionsClickable(True)
+        self.horizontalHeader().setSortIndicatorShown(True)
+        self.horizontalHeader().sectionClicked.connect(self._header_clicked)
+        self.horizontalHeader().sectionResized.connect(lambda *_: QTimer.singleShot(0, self.adjust_row_heights))
+        self.itemClicked.connect(self._copy_item_text)
+        self.itemDoubleClicked.connect(self._double_clicked)
+        self.itemSelectionChanged.connect(self._selection_changed)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._open_context_menu)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.configure_columns()
+        self.setStyleSheet("QTableWidget::item { padding: 4px; }")
+
+    def configure_columns(self):
+        self.setColumnWidth(0, 40)
+        for idx, (_, _, width, _) in enumerate(self._columns, start=1):
+            self.setColumnWidth(idx, width)
+        self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        for idx in range(1, self.columnCount()):
+            self.horizontalHeader().setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
+
+    def clear_table(self):
+        self.setSortingEnabled(False)
+        self.blockSignals(True)
+        self.clearContents()
+        self.setRowCount(0)
+        self._rows = []
+        self.blockSignals(False)
+        self.clear_sort_indicator()
+
+    def load_rows(self, rows):
+        self.clear_table()
+        self._rows = list(rows)
+        self.setRowCount(len(self._rows))
+        self.blockSignals(True)
+        for r_idx, row in enumerate(self._rows):
+            serial = QTableWidgetItem(str(r_idx + 1))
+            serial.setData(Qt.UserRole, row.get("_db_id"))
+            serial.setTextAlignment(Qt.AlignCenter)
+            self.setItem(r_idx, 0, serial)
+
+            for c_idx, (cid, _, _, wrap) in enumerate(self._columns, start=1):
+                text = str(row.get(cid, "") or "")
+                item = QTableWidgetItem(text)
+                item.setData(Qt.UserRole, row.get("_db_id"))
+                if cid in {"desc", "solution", "remarks", "system", "type"} or wrap:
+                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                else:
+                    item.setTextAlignment(Qt.AlignCenter)
+                if cid == "status":
+                    fg = {"Open": C["open"], "Clarification": C["clarif"], "Closed": C["closed"]}.get(text, C["text"])
+                elif row.get("status") == "Open":
+                    fg = C["open"]
+                elif row.get("status") == "Clarification":
+                    fg = C["clarif"]
+                elif row.get("status") == "Closed":
+                    fg = C["closed"]
+                else:
+                    fg = C["text"]
+                item.setForeground(QColorFromHex(fg))
+                self.setItem(r_idx, c_idx, item)
+        self.blockSignals(False)
+        self.adjust_row_heights()
+        self.clearSelection()
+        self.setSortingEnabled(False)
+
+    def adjust_row_heights(self):
+        fm = QFontMetrics(self.font())
+        left_align_cols = {"desc", "solution", "remarks", "system", "type"}
+        for r_idx, row in enumerate(self._rows):
+            row_h = 32
+            for c_idx, (cid, _, _, wrap) in enumerate(self._columns, start=1):
+                item = self.item(r_idx, c_idx)
+                if not item:
+                    continue
+                text = item.text()
+                if not text:
+                    continue
+                width = max(30, self.columnWidth(c_idx) - 12)
+                if cid in left_align_cols and wrap:
+                    rect = fm.boundingRect(0, 0, width, 10000, Qt.TextWordWrap, text)
+                    h = rect.height() + 14
+                else:
+                    h = fm.height() + 14
+                row_h = max(row_h, h)
+            self.setRowHeight(r_idx, row_h)
+
+    def _header_clicked(self, section):
+        if section == 0:
+            return
+        col_id = self._columns[section - 1][0]
+        self.sortRequested.emit(col_id)
+
+    def set_sort_indicator(self, col_id=None, reverse=False):
+        header = self.horizontalHeader()
+        if not col_id:
+            header.setSortIndicatorShown(False)
+            return
+        section = self._col_index_by_id.get(col_id)
+        if section is None:
+            header.setSortIndicatorShown(False)
+            return
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(
+            section,
+            Qt.SortOrder.DescendingOrder if reverse else Qt.SortOrder.AscendingOrder,
+        )
+
+    def clear_sort_indicator(self):
+        self.set_sort_indicator(None, False)
+
+    def _copy_item_text(self, item):
+        if item is not None and item.text():
+            QApplication.clipboard().setText(item.text())
+
+    def _double_clicked(self, item):
+        if item is None:
+            return
+        row = item.row()
+        db_id = self._db_id_for_row(row)
+        if db_id:
+            self.editRequested.emit(db_id)
+
+    def _open_context_menu(self, pos):
+        item = self.itemAt(pos)
+        if item is None:
+            return
+        row = item.row()
+        db_id = self._db_id_for_row(row)
+        if db_id is None:
+            return
+
+        menu = QMenu(self)
+        edit_action = menu.addAction("Edit issue")
+        delete_action = menu.addAction("Delete issue")
+        chosen = menu.exec(self.viewport().mapToGlobal(pos))
+        if chosen == edit_action:
+            self.editRequested.emit(db_id)
+        elif chosen == delete_action:
+            self.deleteRequested.emit(db_id)
+
+    def _selection_changed(self):
+        self.selectionChangedCount.emit(len(self.selectedRows()))
+
+    def selectedRows(self):
+        rows = []
+        for idx in self.selectionModel().selectedRows():
+            rows.append(idx.row())
+        return rows
+
+    def selected_db_ids(self):
+        ids = []
+        for row in self.selectedRows():
+            db_id = self._db_id_for_row(row)
+            if db_id is not None:
+                ids.append(db_id)
+        return ids
+
+    def _db_id_for_row(self, row):
+        item = self.item(row, 0)
+        if item is None:
+            return None
+        return item.data(Qt.UserRole)
+
+
+def QColorFromHex(hex_color):
+    from PySide6.QtGui import QColor
+
+    return QColor(hex_color)
+
+
+class TabContentFrame(QWidget):
+    def __init__(self, parent, tracker_type, on_double_click, on_sort, on_new_issue, on_delete_issue):
+        super().__init__(parent)
         self.tracker_type = tracker_type
         self.on_double_click = on_double_click
-        self.on_table_event = on_table_event
+        self.on_sort = on_sort
         self.on_new_issue = on_new_issue
-        self.on_mass_delete = on_mass_delete
+        self.on_delete_issue = on_delete_issue
+        self._all_rows = []
+        self._search_text = ""
+        self._sort_col = None
+        self._sort_rev = False
+        self._status_filter = "All"
         self._build()
 
     def _build(self):
-        # Add top padding to compensate for tabview position
-        top_spacer = ctk.CTkFrame(self, fg_color="transparent", height=5)
-        top_spacer.pack(fill="x", pady=(0, 0))
-        top_spacer.pack_propagate(False)
-        
-        # Stats bar
-        self._build_stats()
-        
-        # Filters
-        self._build_filters()
-        
-        # Toolbar
-        self._build_toolbar()
-        
-        # Table
-        self._build_table()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 14, 0, 0)
+        lay.setSpacing(14)
 
-    def _build_stats(self):
-        bar = tk.Frame(self, bg=C["panel"], height=34)
-        bar.pack(fill="x", padx=14); bar.pack_propagate(False)
-        self._v_total  = tk.StringVar(value="Total: 0")
-        self._v_open   = tk.StringVar(value="Open: 0")
-        self._v_clarif = tk.StringVar(value="Clarification: 0")
-        self._v_closed = tk.StringVar(value="Closed: 0")
-        for var, col in [(self._v_total,  C["text"]),
-                         (self._v_open,   C["open"]),
-                         (self._v_clarif, C["clarif"]),
-                         (self._v_closed, C["closed"])]:
-            tk.Label(bar, textvariable=var, bg=C["panel"], fg=col,
-                     font=(F["family"], F["size_md"], "bold")
-                     ).pack(side="left", padx=18, pady=6)
+        hero = QFrame(self)
+        hero.setObjectName("HeroPanel")
+        hero.setStyleSheet(
+            f"""
+            QFrame#HeroPanel {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                            stop:0 {C['surface_2']},
+                                            stop:1 {C['header']});
+                border: 1px solid {C['border']};
+                border-radius: 18px;
+            }}
+            """
+        )
+        hero_row = QHBoxLayout(hero)
+        hero_row.setContentsMargins(18, 16, 18, 16)
+        hero_row.setSpacing(14)
 
-        tk.Label(bar, text="Made by Sankar | v2.1",
-                 bg=C["panel"], fg=C["subtle"],
-                 font=(F["family"], F["size_sm"] - 1)).pack(side="right", padx=14)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        title_col.addWidget(_mk_label(f"{self.tracker_type} Workspace", bold=True))
+        subtitle = _mk_label("Filter, search, create, and resolve issues from one control surface.", color=C["subtle"])
+        title_col.addWidget(subtitle)
+        hero_row.addLayout(title_col, 2)
 
-    def _build_filters(self):
-        outer = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=0)
-        outer.pack(fill="x", padx=14, pady=(0, 15))
-        row = ctk.CTkFrame(outer, fg_color="transparent")
-        row.pack(pady=10, padx=6)
-        _lbl(row, "Filters:", bold=True, size=F["size_sm"], color=C["subtle"]
-             ).grid(row=0, column=0, padx=(0, 10))
+        self.sel_lbl = _mk_label("", color=C["subtle"])
+        hero_row.addWidget(self.sel_lbl, 0, Qt.AlignVCenter)
 
-        def flt(label, var, opts, col, w=None):
-            _lbl(row, label, size=F["size_sm"], color=C["subtle"]
-                 ).grid(row=0, column=col, padx=(0, 3))
-            _optmenu(row, opts, var, width=w).grid(row=0, column=col+1, padx=(0, 12))
-            var.trace_add("write", lambda *_: self._refresh())
+        self.search = QLineEdit(self)
+        self.search.setPlaceholderText("Search every visible field...")
+        self.search.setMinimumWidth(250)
+        self.search.textChanged.connect(self.search_apply)
+        hero_row.addWidget(self.search, 0, Qt.AlignVCenter)
 
-        self._fs = ctk.StringVar(value="All")
-        self._ff = ctk.StringVar(value="All")
-        self._fi = ctk.StringVar(value="All")
-        self._fm = ctk.StringVar(value="All")
-        self._fy = ctk.StringVar(value="All")
-        flt("Status", self._fs, ["All", "Open", "Clarification", "Closed"],  1, 100)
-        flt("Family", self._ff, ["All"] + FAMILIES,         3, 100)
-        flt("Issue",  self._fi, ["All"] + ISSUE_TYPES,      5, 175)
-        flt("Month",  self._fm, MONTH_NAMES,                7, 120)
-        flt("Year",   self._fy, YEAR_OPTS,                  9,  88)
-        _btn(row, "Reset", self._reset_filters, outline=True, width=68, radius=8
-             ).grid(row=0, column=11, padx=(4, 0))
+        self.search_match_lbl = _mk_label("", color=C["subtle"])
+        hero_row.addWidget(self.search_match_lbl, 0, Qt.AlignVCenter)
 
-    def _build_toolbar(self):
-        bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.pack(fill="x", padx=14, pady=(10, 0))
+        self.search_clear_btn = _mk_button("Clear", self.search_clear, outline=True, width=70)
+        self.search_clear_btn.hide()
+        hero_row.addWidget(self.search_clear_btn, 0, Qt.AlignVCenter)
 
-        _btn(bar, "+ New Issue", lambda: self.on_new_issue(self.tracker_type),
-             width=180, radius=8).pack(side="left")
-        _btn(bar, "Delete Selected", lambda: self.on_mass_delete(self.tracker_type),
-             color="#a02020", width=148, radius=8).pack(side="left", padx=(10, 0))
-        self._sel_lbl = _lbl(bar, "", size=F["size_sm"], color=C["subtle"])
-        self._sel_lbl.pack(side="left", padx=10)
+        lay.addWidget(hero)
 
-        _lbl(bar, "Click row to select, double-click to edit",
-             size=F["size_sm"], color=C["subtle"]).pack(side="right", padx=(0, 16))
+        metrics = QHBoxLayout()
+        metrics.setSpacing(10)
+        self.metric_total = _metric_card("Total", "0", accent=C["accent"])
+        self.metric_open = _metric_card("Open", "0", accent=C["open"])
+        self.metric_clarif = _metric_card("Clarification", "0", accent=C["clarif"])
+        self.metric_closed = _metric_card("Closed", "0", accent=C["closed"])
+        self.metric_open.clicked.connect(lambda: self.apply_status_filter("Open"))
+        self.metric_clarif.clicked.connect(lambda: self.apply_status_filter("Clarification"))
+        self.metric_closed.clicked.connect(lambda: self.apply_status_filter("Closed"))
+        for card in [self.metric_total, self.metric_open, self.metric_clarif, self.metric_closed]:
+            metrics.addWidget(card)
+        lay.addLayout(metrics)
 
-        self._search_match_lbl = _lbl(bar, "", size=F["size_sm"], color=C["subtle"])
-        self._search_match_lbl.pack(side="right", padx=(0, 6))
+        filters_card = _card("Filters")
+        filters_body = QWidget(filters_card)
+        filters_row = QGridLayout(filters_body)
+        filters_row.setContentsMargins(0, 0, 0, 0)
+        filters_row.setHorizontalSpacing(10)
+        filters_row.setVerticalSpacing(8)
+        filters_card.layout().addWidget(filters_body)
 
-        self._search_clear_btn = _btn(bar, "✕", self._search_clear,
-                                       outline=True, width=28, radius=6)
-        self._search_clear_btn.pack(side="right", padx=(0, 2))
-        self._search_clear_btn.pack_forget()
+        self.fs = self._mk_combo(["All", "Open", "Clarification", "Closed"])
+        self.ff = self._mk_combo(["All"] + FAMILIES)
+        self.fi = self._mk_combo(["All"] + ISSUE_TYPES)
+        self.fm = self._mk_combo(MONTH_NAMES)
+        self.fy = self._mk_combo(YEAR_OPTS)
 
-        self._search_var = tk.StringVar()
-        self._search_entry = ctk.CTkEntry(
-            bar, textvariable=self._search_var,
-            placeholder_text="🔍  Search all columns…",
-            width=240, corner_radius=8,
-            fg_color=C["entry_bg"], text_color=C["text"],
-            border_color=C["border"],
-            font=_font(size=F["size_md"]))
-        self._search_entry.pack(side="right", padx=(0, 4))
-        self._search_var.trace_add("write", lambda *_: self._search_apply())
+        self._wire_filter(filters_row, "Status", self.fs, 0)
+        self._wire_filter(filters_row, "Family", self.ff, 2)
+        self._wire_filter(filters_row, "Issue", self.fi, 4)
+        self._wire_filter(filters_row, "Month", self.fm, 6)
+        self._wire_filter(filters_row, "Year", self.fy, 8)
 
-        self._search_entry.bind("<Escape>", lambda e: self._search_clear())
+        reset_btn = _mk_button("Reset Filters", self.reset_filters, outline=True, width=132)
+        filters_row.addWidget(reset_btn, 0, 10, 1, 1)
+        filters_row.setColumnStretch(11, 1)
+        lay.addWidget(filters_card)
 
-    def _build_table(self):
-        outer = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=10)
-        outer.pack(fill="both", expand=True, padx=14, pady=8)
+        table_card = _card()
+        table_lay = QVBoxLayout()
+        table_lay.setContentsMargins(10, 10, 10, 10)
+        self.table = IssueTableWidget(self)
+        self.table.sortRequested.connect(self._sort_requested)
+        self.table.editRequested.connect(self.on_double_click)
+        self.table.deleteRequested.connect(self.on_delete_issue)
+        self.table.selectionChangedCount.connect(self.update_selection_label)
+        table_lay.addWidget(self.table)
+        table_card.setLayout(table_lay)
+        lay.addWidget(table_card, 1)
 
-        self._wrap_cols = {c[0] for c in TABLE_COLS if c[3]}
-        self._col_hdrs  = {c[0]: c[1] for c in TABLE_COLS}
-        self._sort_col = None
-        self._sort_rev = False
+    def _mk_combo(self, items):
+        field = FilterDropdown(items, self)
+        field.currentTextChanged.connect(self._refresh)
+        field.setMinimumWidth(110)
+        return field
 
-        self.table = CanvasTable(outer, TABLE_COLS,
-                                  on_double_click=self.on_double_click,
-                                  on_select=self.on_table_event)
-        self.table.pack(fill="both", expand=True, padx=6, pady=6)
+    def _wire_filter(self, row, label, combo, col):
+        row.addWidget(_mk_label(label, color=C["subtle"]), 0, col)
+        row.addWidget(combo, 0, col + 1)
 
     def _refresh(self, *_):
-        self.table.clear()
-        self._search_var.set("")
-        self._search_match_lbl.configure(text="")
-        self._search_clear_btn.pack_forget()
+        for combo in [self.fs, self.ff, self.fi, self.fm, self.fy]:
+            combo.blockSignals(True)
+        self.search.blockSignals(True)
+        self.search.setText("")
+        self.search.blockSignals(False)
+        self.search_match_lbl.setText("")
+        self.search_clear_btn.hide()
+        for combo in [self.fs, self.ff, self.fi, self.fm, self.fy]:
+            combo.blockSignals(False)
+
         self._sort_col = None
         self._sort_rev = False
-
-        rows = fetch_issues(self._fs.get(), self._ff.get(),
-                           self._fi.get(), self._fm.get(), self._fy.get(),
-                           self.tracker_type)
+        self._status_filter = self.fs.currentText()
+        rows = fetch_issues(self.fs.currentText(), self.ff.currentText(), self.fi.currentText(), self.fm.currentText(), self.fy.currentText(), self.tracker_type)
+        self._all_rows = []
         for row in rows:
-            data = {
-                "_db_id"  : row["id"],
-                "date"    : _fmt_date(row["date_reported"]),
-                "system"  : row["system_number"]  or "",
-                "family"  : row["product_family"],
-                "type"    : row["issue_type"],
-                "sps"     : row["sps_number"],
-                "ncr"     : row["ncr_number"],
-                "status"  : row["status"],
-                "desc"    : row["issue_desc"]      or "",
-                "solution": row["solution"]         or "",
-                "sol_date": _fmt_date(row["solution_date"]),
-                "crf"     : row["crf"],
-                "esw"     : row["esw"],
-                "scv"     : row["scv"],
-                "remarks" : row["remarks"]          or "",
-            }
-            self.table.add_row(row["id"], data)
+            self._all_rows.append(
+                {
+                    "_db_id": row["id"],
+                    "date": _fmt_display_date(row["date_reported"]),
+                    "system": row["system_number"] or "",
+                    "family": row["product_family"] or "",
+                    "type": row["issue_type"] or "",
+                    "sps": row["sps_number"] or "",
+                    "ncr": row["ncr_number"] or "",
+                    "status": row["status"] or "",
+                    "desc": row["issue_desc"] or "",
+                    "solution": row["solution"] or "",
+                    "sol_date": _fmt_display_date(row["solution_date"]),
+                    "crf": row["crf"] or "",
+                    "esw": row["esw"] or "",
+                    "scv": row["scv"] or "",
+                    "remarks": row["remarks"] or "",
+                }
+            )
+        self._apply_visible_rows()
+        self.table.clear_sort_indicator()
+        total, open_, closed, clarif = get_counts(self.tracker_type)
+        self.metric_total._value_label.setText(str(total))
+        self.metric_open._value_label.setText(str(open_))
+        self.metric_clarif._value_label.setText(str(clarif))
+        self.metric_closed._value_label.setText(str(closed))
+        self._sync_metric_cards()
+        self.sel_lbl.setText("")
 
-        t, o, cl, cf = get_counts(self.tracker_type)
-        self._v_total.set(f"Total: {t}")
-        self._v_open.set(f"Open: {o}")
-        self._v_clarif.set(f"Clarification: {cf}")
-        self._v_closed.set(f"Closed: {cl}")
-        self._sel_lbl.configure(text="")
-
-    def _reset_filters(self):
-        for v in [self._fs, self._ff, self._fi, self._fm, self._fy]:
-            v.set("All")
-
-    def _search_apply(self, *_):
-        query = self._search_var.get().strip().lower()
-
+    def _apply_visible_rows(self):
+        query = self.search.text().strip().lower()
         if query:
-            self._search_clear_btn.pack(side="right", padx=(0, 2),
-                                         before=self._search_entry)
+            tokens = query.split()
+            visible = []
+            for row in self._all_rows:
+                haystack = " ".join(str(v) for v in row.values()).lower()
+                if all(token in haystack for token in tokens):
+                    visible.append(row)
         else:
-            self._search_clear_btn.pack_forget()
+            visible = list(self._all_rows)
+        self.table.load_rows(visible)
+        if self._sort_col:
+            self.table.set_sort_indicator(self._sort_col, self._sort_rev)
+        else:
+            self.table.clear_sort_indicator()
+        if query:
+            n = len(visible)
+            self.search_match_lbl.setText(f"{n} match{'es' if n != 1 else ''}" if n else "No matches")
+            self.search_match_lbl.setStyleSheet(f"color: {C['subtle'] if n else C['open']};")
+            self.search_clear_btn.show()
+        else:
+            self.search_match_lbl.setText("")
+            self.search_clear_btn.hide()
 
-        if not query:
-            self.table.show_all_rows()
-            n = self.table.get_row_count()
-            self._search_match_lbl.configure(text="")
-            return
+    def _sort_requested(self, col_id):
+        self._sort_rev = not self._sort_rev if self._sort_col == col_id else False
+        self._sort_col = col_id
+        self._all_rows.sort(key=lambda r: str(r.get(col_id, "")), reverse=self._sort_rev)
+        self._apply_visible_rows()
+        self.table.set_sort_indicator(col_id, self._sort_rev)
+        self.on_sort(self.tracker_type, col_id, self._sort_rev)
 
-        tokens = query.split()
-        matches = []
+    def reset_filters(self):
+        for combo in [self.fs, self.ff, self.fi, self.fm, self.fy]:
+            with QSignalBlocker(combo):
+                combo.setCurrentText("All")
+        self._status_filter = "All"
+        self._sync_metric_cards()
+        self._refresh()
+        self.table.clear_sort_indicator()
 
-        for i, row in enumerate(self.table._data):
-            haystack = " ".join(str(v) for v in row.values()).lower()
-            if all(t in haystack for t in tokens):
-                matches.append(i)
+    def apply_status_filter(self, status):
+        next_status = "All" if self._status_filter == status else status
+        self._status_filter = next_status
+        with QSignalBlocker(self.fs):
+            self.fs.setCurrentText(next_status)
+        self._sync_metric_cards()
+        self._refresh()
 
-        self.table.filter_rows(matches)
+    def _sync_metric_cards(self):
+        states = {
+            "Open": self.metric_open,
+            "Clarification": self.metric_clarif,
+            "Closed": self.metric_closed,
+        }
+        self.metric_total.setProperty("selected", False)
+        self.metric_total.style().unpolish(self.metric_total)
+        self.metric_total.style().polish(self.metric_total)
+        self.metric_total.update()
+        for status, card in states.items():
+            selected = (self._status_filter == status)
+            card.setProperty("selected", selected)
+            card.style().unpolish(card)
+            card.style().polish(card)
+            card.update()
 
-        n = len(matches)
-        self._search_match_lbl.configure(
-            text=f"{n} match{'es' if n != 1 else ''}" if n else "No matches",
-            text_color=C["subtle"] if n else C["open"])
+    def search_apply(self, *_):
+        self._apply_visible_rows()
 
-    def _search_clear(self):
-        self._search_var.set("")
-        self._search_entry.focus_set()
-        self.table.show_all_rows()
-        self._search_match_lbl.configure(text="")
+    def search_clear(self):
+        self.search.clear()
+        self.search.setFocus()
+        self._apply_visible_rows()
 
     def get_selected_db_ids(self):
-        return self.table.get_selected_db_ids()
+        return self.table.selected_db_ids()
 
     def update_selection_label(self, n):
-        self._sel_lbl.configure(
-            text=f"{n} row{'s' if n != 1 else ''} selected" if n else "")
+        self.sel_lbl.setText(f"{n} row{'s' if n != 1 else ''} selected" if n else "")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MAIN WINDOW
-# ══════════════════════════════════════════════════════════════════════════════
-class App(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-        ctk.set_appearance_mode("light")
-        ctk.set_default_color_theme("blue")
-        self.configure(fg_color=C["bg"])
-        self.title(WIN_TITLE)
-        self.geometry(WIN_SIZE)
-        self.minsize(*WIN_MIN)
-        self._id_map   = {}
-        self._raw_text = {}
-        self._tab_frames = {}
+class ExportScopeDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.result = None
+        self.setWindowTitle("Select Export Scope")
+        self.setFixedSize(450, 320)
+        self.setModal(True)
         self._build()
-        self._refresh_all_tabs()
 
     def _build(self):
-        self._build_header()
-        self._build_tabview()
+        self.setStyleSheet(_stylesheet())
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 20, 20, 20)
+        outer.setSpacing(10)
+        outer.addWidget(_mk_label("Select Export Scope", bold=True))
+        outer.addWidget(_mk_label("Choose which issue types to include in the export:", color=C["subtle"]))
 
-    def _build_header(self):
-        bar = tk.Frame(self, bg=C["header"], height=54)
-        bar.pack(fill="x"); bar.pack_propagate(False)
+        self.scope = "Both"
+        self.rb_eng = QRadioButton("Engineering Issues Only")
+        self.rb_mat = QRadioButton("Material Issues Only")
+        self.rb_both = QRadioButton("Both Engineering and Material Issues")
+        self.rb_both.setChecked(True)
+        outer.addWidget(self.rb_eng)
+        outer.addWidget(self.rb_mat)
+        outer.addWidget(self.rb_both)
 
-        if os.path.exists(LOGO_PATH):
-            try:
-                from PIL import ImageTk
-                img = Image.open(LOGO_PATH)
-                img.thumbnail((96, 72), Image.LANCZOS)
-                self._logo = ImageTk.PhotoImage(img)
-                tk.Label(bar, image=self._logo, bg=C["header"],
-                         borderwidth=0).pack(side="left", padx=(14, 6), pady=9)
-            except Exception:
-                pass
-
-        tk.Label(bar, text=WIN_TITLE, bg=C["header"], fg="white",
-                 font=(F["family"], F["size_xl"], "bold")
-                 ).pack(side="left", padx=(0, 20), pady=(20,0))
-
-        for txt, cmd, bold in [
-            ("Refresh All",  self._refresh_all_tabs,   False),
-            ("Export Excel", self._export,             False),
-        ]:
-            tk.Button(bar, text=txt,
-                      bg="#174e8a" if bold else C["header"],
-                      fg="white", relief="flat", bd=0, padx=14, pady=5,
-                      activebackground=C["accent_h"], activeforeground="white",
-                      font=(F["family"], F["size_md"], "bold" if bold else "normal"),
-                      command=cmd).pack(side="right", padx=(0, 8), pady=12)
-
-    def _build_tabview(self):
-        # Create tabview directly in main window with transparent background
-        self.tabview = ctk.CTkTabview(self, fg_color="transparent")
-        self.tabview.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-        
-        # Add tabs
-        self.tabview.add("Engineering Issues")
-        self.tabview.add("Material Issues")
-        
-        # Create content frames for each tab
-        for tab_name, tracker_type in [("Engineering Issues", "Engineering"), ("Material Issues", "Material")]:
-            tab_frame = TabContentFrame(
-                self.tabview.tab(tab_name),
-                tracker_type,
-                self._on_table_double_click,
-                self._on_table_event,
-                self._new_issue,
-                self._mass_delete
-            )
-            tab_frame.pack(fill="both", expand=True)
-            self._tab_frames[tracker_type] = tab_frame
-
-    def _on_table_double_click(self, row_idx):
-        # Get the active tab's tracker type
-        active_tab = self.tabview.get()
-        tracker_type = "Engineering" if active_tab == "Engineering Issues" else "Material"
-        tab_frame = self._tab_frames[tracker_type]
-        db_id = tab_frame.table.get_db_id(row_idx)
-        if db_id:
-            self._open_by_id(db_id)
-
-    def _on_table_event(self, event_type, data):
-        if event_type == "sort":
-            # Get the active tab's tracker type
-            active_tab = self.tabview.get()
-            tracker_type = "Engineering" if active_tab == "Engineering Issues" else "Material"
-            tab_frame = self._tab_frames[tracker_type]
-            self._sort(tab_frame, data)
-        elif event_type == "select":
-            # Get the active tab's tracker type
-            active_tab = self.tabview.get()
-            tracker_type = "Engineering" if active_tab == "Engineering Issues" else "Material"
-            tab_frame = self._tab_frames[tracker_type]
-            n = 1 if data else 0
-            tab_frame.update_selection_label(n)
-
-    def _sort(self, tab_frame, col):
-        rev = (not tab_frame._sort_rev) if tab_frame._sort_col == col else False
-        tab_frame.table.sort_by(col, reverse=rev)
-        tab_frame._sort_col = col
-        tab_frame._sort_rev = rev
-
-    def _refresh_all_tabs(self, *_):
-        for tracker_type, tab_frame in self._tab_frames.items():
-            tab_frame._refresh()
-
-    def _new_issue(self, tracker_type):
-        dlg = NewIssueDialog(self, tracker_type)
-        self.wait_window(dlg)
-        self._tab_frames[tracker_type]._refresh()
-
-    def _open_by_id(self, db_id):
-        dlg = ManageDialog(self, db_id)
-        self.wait_window(dlg)
-        # Refresh the appropriate tab based on the issue's tracker type
-        issue = fetch_by_id(db_id)
-        if issue:
-            tracker_type = issue.get("tracker_type", "Engineering")
-            if tracker_type in self._tab_frames:
-                self._tab_frames[tracker_type]._refresh()
-
-    def _mass_delete(self, tracker_type):
-        tab_frame = self._tab_frames[tracker_type]
-        ids = tab_frame.get_selected_db_ids()
-        if not ids:
-            messagebox.showinfo("No Selection", "Select rows to delete first.",
-                                parent=self)
-            return
-        if messagebox.askyesno("Confirm Delete",
-                               f"Permanently delete {len(ids)} {tracker_type} issue(s)?\n"
-                               "This cannot be undone.", parent=self):
-            delete_by_ids(ids)
-            tab_frame._refresh()
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(_mk_button("Cancel", self.reject, outline=True, width=90))
+        row.addWidget(_mk_button("Export", self._export, width=120))
+        outer.addLayout(row)
 
     def _export(self):
-        # Show export scope selection dialog
-        export_dialog = ExportScopeDialog(self)
-        self.wait_window(export_dialog)
+        if self.rb_eng.isChecked():
+            self.result = "Engineering"
+        elif self.rb_mat.isChecked():
+            self.result = "Material"
+        else:
+            self.result = "Both"
+        self.accept()
 
-        if not export_dialog.result:
+
+class AppWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self._tab_frames = {}
+        self.setWindowTitle(WIN_TITLE)
+        self.resize(*WIN_SIZE)
+        self.setMinimumSize(*WIN_MIN)
+        self.setStyleSheet(_stylesheet())
+        self._build()
+        self.refresh_all_tabs()
+
+    def _build(self):
+        central = QWidget(self)
+        central.setObjectName("AppRoot")
+        self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(14)
+
+        sidebar = _card()
+        sidebar.setFixedWidth(330)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(18, 18, 18, 18)
+        side.setSpacing(14)
+
+        brand = QFrame()
+        brand.setStyleSheet(
+            f"""
+            QFrame {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                            stop:0 {C['surface_2']},
+                                            stop:1 {C['panel']});
+                border: none;
+                border-radius: 16px;
+            }}
+            """
+        )
+        brand_lay = QVBoxLayout(brand)
+        brand_lay.setContentsMargins(16, 16, 16, 16)
+        brand_lay.setSpacing(8)
+        if os.path.exists(LOGO_PATH):
+            try:
+                pix = QPixmap(LOGO_PATH)
+                if not pix.isNull():
+                    pix = pix.scaled(72, 52, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    logo = QLabel()
+                    logo.setPixmap(pix)
+                    brand_lay.addWidget(logo)
+            except Exception:
+                pass
+        brand_title = _mk_label("Production Issue", bold=True)
+        brand_sub = _mk_label("Tracker Studio", bold=True, color=C["accent"])
+        brand_desc = _mk_label("A faster way to log, triage, and export issues.", color=C["subtle"])
+        brand_desc.setWordWrap(True)
+        brand_desc.setMinimumHeight(36)
+        brand_lay.addWidget(brand_title)
+        brand_lay.addWidget(brand_sub)
+        brand_lay.addWidget(brand_desc)
+        side.addWidget(brand)
+
+        action_card = _card("Quick Actions")
+        action_lay = action_card.layout()
+        self.quick_new_btn = _mk_button("New Issue", self._quick_new_issue, width=240)
+        self.quick_refresh_btn = _mk_button("Refresh All", self.refresh_all_tabs, outline=True, width=240)
+        self.quick_export_btn = _mk_button("Export Excel", self.export_data, outline=True, width=240)
+        action_lay.addWidget(self.quick_new_btn)
+        action_lay.addWidget(self.quick_refresh_btn)
+        action_lay.addWidget(self.quick_export_btn)
+        side.addWidget(action_card)
+
+        summary_card = _card("Current Snapshot")
+        summary_lay = summary_card.layout()
+        self.active_tab_lbl = _mk_label("Engineering Issues", bold=True)
+        summary_lay.addWidget(self.active_tab_lbl)
+        self.side_total_lbl = _mk_label("Total: 0")
+        self.side_open_lbl = _mk_label("Open: 0")
+        self.side_clarif_lbl = _mk_label("Clarification: 0")
+        self.side_closed_lbl = _mk_label("Closed: 0")
+        for lab in [self.side_total_lbl, self.side_open_lbl, self.side_clarif_lbl, self.side_closed_lbl]:
+            summary_lay.addWidget(lab)
+        side.addWidget(summary_card)
+
+        note_card = _card("Tip")
+        note_lay = note_card.layout()
+        tip_text = _mk_label("Use the search bar to filter the visible tab instantly. Sorting happens by clicking column headers.", color=C["subtle"])
+        tip_text.setWordWrap(True)
+        tip_text.setMinimumHeight(42)
+        note_lay.addWidget(tip_text)
+        side.addWidget(note_card)
+        side.addStretch(1)
+        side.addWidget(_mk_label("AMAT Production Issue Tracker", color=C["subtle"]))
+        side.addWidget(_mk_label("Made by Sankar | v2.1", color=C["subtle"]))
+
+        main = QVBoxLayout()
+        main.setSpacing(16)
+
+        header = QFrame(self)
+        header.setObjectName("HeaderBar")
+        header.setFixedHeight(88)
+        header.setStyleSheet(
+            f"""
+            QFrame#HeaderBar {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                            stop:0 {C['header']},
+                                            stop:0.45 {C['surface_2']},
+                                            stop:1 {C['panel']});
+                border: none;
+                border-radius: 18px;
+            }}
+            """
+        )
+        h = QHBoxLayout(header)
+        h.setContentsMargins(18, 14, 18, 14)
+        h.setSpacing(12)
+
+        headline = QVBoxLayout()
+        headline.setSpacing(4)
+        headline.addWidget(_mk_label(WIN_TITLE, bold=True, object_name="TitleLabel"))
+        headline.addWidget(_mk_label("Two focused workspaces for engineering and material issues.", color=C["subtle"]))
+        h.addLayout(headline, 2)
+
+        h.addStretch(1)
+        self.header_scope_lbl = _mk_label("Active: Engineering", bold=True, color=C["accent"])
+        h.addWidget(self.header_scope_lbl)
+        main.addWidget(header)
+
+        self.tabs = QTabWidget(self)
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabBar().setDrawBase(False)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        main.addWidget(self.tabs, 1)
+
+        for tab_name, tracker_type in [("Engineering Workspace", "Engineering"), ("Material Workspace", "Material")]:
+            page = QWidget()
+            page_lay = QVBoxLayout(page)
+            page_lay.setContentsMargins(0, 8, 0, 0)
+            frame = TabContentFrame(
+                page,
+                tracker_type,
+                self.open_issue_by_id,
+                self.on_table_sort,
+                self.new_issue,
+                self.delete_issue_by_id,
+            )
+            page_lay.addWidget(frame)
+            self.tabs.addTab(page, tab_name)
+            self._tab_frames[tracker_type] = frame
+
+        root.addWidget(sidebar)
+        root.addLayout(main, 1)
+
+    def current_tracker_type(self):
+        return "Engineering" if self.tabs.currentIndex() == 0 else "Material"
+
+    def refresh_all_tabs(self):
+        for frame in self._tab_frames.values():
+            frame._refresh()
+        self._sync_sidebar()
+
+    def _sync_sidebar(self):
+        tracker = self.current_tracker_type()
+        self.active_tab_lbl.setText(f"{tracker} Workspace")
+        self.header_scope_lbl.setText(f"Active: {tracker}")
+        total, open_, closed, clarif = get_counts(tracker)
+        self.side_total_lbl.setText(f"Total: {total}")
+        self.side_open_lbl.setText(f"Open: {open_}")
+        self.side_clarif_lbl.setText(f"Clarification: {clarif}")
+        self.side_closed_lbl.setText(f"Closed: {closed}")
+
+    def _on_tab_changed(self, _):
+        self._sync_sidebar()
+
+    def new_issue(self, tracker_type):
+        dlg = NewIssueDialog(self, tracker_type)
+        if dlg.exec() == QDialog.Accepted:
+            self._tab_frames[tracker_type]._refresh()
+        self._sync_sidebar()
+
+    def open_issue_by_id(self, db_id):
+        issue = fetch_by_id(db_id)
+        if not issue:
+            return
+        tracker_type = issue.get("tracker_type", "Engineering")
+        dlg = ManageDialog(self, db_id)
+        dlg.exec()
+        if tracker_type in self._tab_frames:
+            self._tab_frames[tracker_type]._refresh()
+        self._sync_sidebar()
+
+    def delete_issue_by_id(self, db_id):
+        issue = fetch_by_id(db_id)
+        if not issue:
+            return
+        tracker_type = issue.get("tracker_type", "Engineering")
+        system_title = (issue.get("system_number") or "").splitlines()[0]
+        prompt = f"Delete this issue?\n\n{system_title}" if system_title else "Delete this issue?"
+        if QMessageBox.question(
+            self,
+            "Delete Issue",
+            prompt,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
+            delete_by_ids([db_id])
+            if tracker_type in self._tab_frames:
+                self._tab_frames[tracker_type]._refresh()
+            self._sync_sidebar()
+
+    def mass_delete(self, tracker_type):
+        frame = self._tab_frames[tracker_type]
+        ids = frame.get_selected_db_ids()
+        if not ids:
+            QMessageBox.information(self, "No Selection", "Select rows to delete first.")
+            return
+        if QMessageBox.question(
+            self,
+            "Confirm Delete",
+            f"Permanently delete {len(ids)} {tracker_type} issue(s)?\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
+            delete_by_ids(ids)
+            frame._refresh()
+        self._sync_sidebar()
+
+    def on_table_sort(self, tracker_type, col_id, reverse):
+        # Kept for parity and potential future header state sync.
+        return
+
+    def export_data(self):
+        export_dialog = ExportScopeDialog(self)
+        if export_dialog.exec() != QDialog.Accepted or not export_dialog.result:
             return
 
         export_scope = export_dialog.result
+        active_tracker = self.current_tracker_type()
+        tab_frame = self._tab_frames[active_tracker]
 
-        # Get current filter settings from active tab
-        active_tab = self.tabview.get()
-        tracker_type = "Engineering" if active_tab == "Engineering Issues" else "Material"
-        tab_frame = self._tab_frames[tracker_type]
-
-        # Fetch data with current filter settings
         engineering_rows = []
         material_rows = []
         if export_scope in ["Engineering", "Both"]:
             engineering_rows = fetch_issues(
-                status_f=tab_frame._fs.get(),
-                family_f=tab_frame._ff.get(),
-                itype_f=tab_frame._fi.get(),
-                month_f=tab_frame._fm.get(),
-                year_f=tab_frame._fy.get(),
-                tracker_type="Engineering"
+                status_f=tab_frame.fs.currentText(),
+                family_f=tab_frame.ff.currentText(),
+                itype_f=tab_frame.fi.currentText(),
+                month_f=tab_frame.fm.currentText(),
+                year_f=tab_frame.fy.currentText(),
+                tracker_type="Engineering",
             )
         if export_scope in ["Material", "Both"]:
             material_rows = fetch_issues(
-                status_f=tab_frame._fs.get(),
-                family_f=tab_frame._ff.get(),
-                itype_f=tab_frame._fi.get(),
-                month_f=tab_frame._fm.get(),
-                year_f=tab_frame._fy.get(),
-                tracker_type="Material"
+                status_f=tab_frame.fs.currentText(),
+                family_f=tab_frame.ff.currentText(),
+                itype_f=tab_frame.fi.currentText(),
+                month_f=tab_frame.fm.currentText(),
+                year_f=tab_frame.fy.currentText(),
+                tracker_type="Material",
             )
-        
-        # Determine if customer mode
+
         customer_mode = False
-        active_tab = self.tabview.get()
-        tracker_type = "Engineering" if active_tab == "Engineering Issues" else "Material"
-        tab_frame = self._tab_frames[tracker_type]
-        
-        if tab_frame._fs.get() == "Open":
-            answer = messagebox.askyesnocancel(
+        if tab_frame.fs.currentText() == "Open":
+            answer = QMessageBox.question(
+                self,
                 "Export Type",
-                "You are exporting Open issues.\n\n"
-                "Export as Customer Report?\n"
-                "(Yes = customer view, no internal fields)\n"
-                "(No  = full internal log)",
-                parent=self)
-            if answer is None: return
-            customer_mode = answer
-        
+                "You are exporting Open issues.\n\nExport as Customer Report?\n(Yes = customer view, no internal fields)\n(No = full internal log)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Cancel:
+                return
+            customer_mode = answer == QMessageBox.StandardButton.Yes
+
         suffix = "_Customer" if customer_mode else ""
         scope_suffix = f"_{export_scope}" if export_scope != "Both" else ""
-        path = filedialog.asksaveasfilename(
-            parent=self, defaultextension=".xlsx",
-            filetypes=[("Excel Workbook", "*.xlsx")],
-            initialfile=f"AMAT_Issues{scope_suffix}{suffix}_{datetime.date.today()}.xlsx")
-        if not path: return
-        
+        initial = f"AMAT_Issues{scope_suffix}{suffix}_{datetime.date.today()}.xlsx"
+        path, _ = QFileDialog.getSaveFileName(self, "Save Excel", initial, "Excel Workbook (*.xlsx)")
+        if not path:
+            return
+
         try:
             export_excel(engineering_rows, material_rows, path, customer_mode=customer_mode, export_scope=export_scope)
             total_rows = len(engineering_rows) + len(material_rows)
-            if messagebox.askyesno("Exported",
-                                   f"Saved {total_rows} rows.\n\nOpen file now?",
-                                   parent=self):
-                os.startfile(path)
+            if QMessageBox.question(
+                self,
+                "Exported",
+                f"Saved {total_rows} rows.\n\nOpen file now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            ) == QMessageBox.StandardButton.Yes:
+                try:
+                    os.startfile(path)
+                except Exception:
+                    pass
         except Exception as e:
-            messagebox.showerror("Export Error", str(e), parent=self)
+            QMessageBox.critical(self, "Export Error", str(e))
+
+    def _quick_new_issue(self):
+        self.new_issue(self.current_tracker_type())
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  EXPORT SCOPE DIALOG
-# ══════════════════════════════════════════════════════════════════════════════
-class ExportScopeDialog(ctk.CTkToplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.title("Select Export Scope")
-        self.geometry("450x320")
-        self.resizable(False, False)
-        self.grab_set()
-        self.configure(fg_color=C["bg"])
-        self.result = None
-        self._build()
-
-    def _build(self):
-        outer = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
-        outer.pack(fill="both", expand=True, padx=20, pady=20)
-
-        _lbl(outer, "Select Export Scope", bold=True, size=F["size_xl"]).pack(
-            anchor="w", padx=10, pady=(10, 20))
-
-        _lbl(outer, "Choose which issue types to include in the export:",
-             size=F["size_md"], color=C["subtle"]).pack(anchor="w", padx=10, pady=(0, 20))
-
-        self._scope_var = tk.StringVar(value="Both")
-
-        options = [
-            ("Engineering Issues Only", "Engineering"),
-            ("Material Issues Only", "Material"),
-            ("Both Engineering and Material Issues", "Both")
-        ]
-
-        for text, value in options:
-            rb = ctk.CTkRadioButton(
-                outer, text=text, value=value, variable=self._scope_var,
-                fg_color=C["accent"], hover_color=C["accent_h"], text_color=C["text"],
-                corner_radius=50, font=_font(size=F["size_md"])
-            )
-            rb.pack(anchor="w", padx=10, pady=8)
-
-        bf = ctk.CTkFrame(outer, fg_color="transparent")
-        bf.pack(fill="x", pady=(20, 0))
-
-        _btn(bf, "Cancel", self._cancel, outline=True, width=90, radius=8
-             ).pack(side="right", padx=6)
-        _btn(bf, "Export", self._export, width=120, radius=8
-             ).pack(side="right", padx=6)
-
-    def _export(self):
-        self.result = self._scope_var.get()
-        self.destroy()
-
-    def _cancel(self):
-        self.destroy()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  ENTRY POINT
-# ══════════════════════════════════════════════════════════════════════════════
-if __name__ == "__main__":
+def main():
     init_db()
-    App().mainloop()
+    app = QApplication(sys.argv)
+    app.setApplicationName(WIN_TITLE)
+    app.setStyle("Fusion")
+    app.setFont(QFont(F["family"], F["size_md"]))
+    app.setStyleSheet(_stylesheet())
+    win = AppWindow()
+    win.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
