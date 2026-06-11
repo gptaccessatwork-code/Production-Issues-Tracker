@@ -1,5 +1,5 @@
 """
-AMAT Production Issue Tracker v2.1
+AMAT Production Issue Tracker v3.0
 Requires: pip install PySide6 openpyxl pillow
 """
 
@@ -15,7 +15,8 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from PIL import Image
-from PySide6.QtCore import QDate, QEvent, QSignalBlocker, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QDate, QEvent, QSignalBlocker, QSize, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QStyledItemDelegate,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -486,6 +488,10 @@ def _stylesheet():
         font-weight: 700;
     }}
     QPushButton:hover {{
+        background: #ffbf2f;
+        color: #101828;
+    }}
+    QPushButton:pressed {{
         background: {C['accent_h']};
         color: white;
     }}
@@ -496,13 +502,23 @@ def _stylesheet():
     }}
     QPushButton[outline="true"]:hover {{
         background: {C['sel']};
+        color: white;
+    }}
+    QPushButton[outline="true"]:pressed {{
+        background: {C['accent']};
+        color: #101828;
     }}
     QPushButton[danger="true"] {{
         background: #a02020;
         color: white;
     }}
     QPushButton[danger="true"]:hover {{
+        background: #c62828;
+        color: white;
+    }}
+    QPushButton[danger="true"]:pressed {{
         background: #7f1717;
+        color: white;
     }}
     QToolButton {{
         background: {C['accent']};
@@ -512,6 +528,10 @@ def _stylesheet():
         padding: 0px;
     }}
     QToolButton:hover {{
+        background: #ffbf2f;
+        color: #101828;
+    }}
+    QToolButton:pressed {{
         background: {C['accent_h']};
         color: white;
     }}
@@ -670,14 +690,14 @@ def _mk_label(text="", bold=False, color=None, object_name=None):
     return label
 
 
-def _mk_button(text, on_click, outline=False, danger=False, width=None, color=None):
+def _mk_button(text, on_click, outline=False, danger=False, width=None, color=None, text_color=None):
     btn = QPushButton(text)
     btn.setProperty("outline", outline)
     btn.setProperty("danger", danger)
     if width:
         btn.setFixedWidth(width)
     if color and not outline and not danger:
-        btn.setStyleSheet(f"background: {color}; color: white;")
+        btn.setStyleSheet(f"background: {color}; color: {text_color or 'white'};")
     if on_click:
         btn.clicked.connect(on_click)
     btn.style().unpolish(btn)
@@ -855,8 +875,8 @@ class CalendarDialog(QDialog):
     def __init__(self, parent=None, initial=None):
         super().__init__(parent)
         self.setWindowTitle("Select Date")
-        self.setModal(True)
-        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.result_date = None
         self._build(initial)
 
@@ -1064,6 +1084,7 @@ class DateFieldWidget(QWidget):
         super().__init__(parent)
         self._nullable = nullable
         self._value = initial or ""
+        self._calendar_dialog = None
         if not self._value and not nullable:
             self._value = datetime.date.today().strftime("%Y-%m-%d")
         self._build()
@@ -1106,10 +1127,50 @@ class DateFieldWidget(QWidget):
             self.set_value("")
 
     def open_calendar(self):
+        if self._calendar_dialog is not None and self._calendar_dialog.isVisible():
+            self._calendar_dialog.close()
+            return
         initial = _parse_iso_date(self._value)
         dlg = CalendarDialog(self, initial=initial)
-        if dlg.exec() == QDialog.Accepted and dlg.result_date:
+        self._calendar_dialog = dlg
+        dlg.adjustSize()
+        anchor = self.btn_cal.mapToGlobal(QPoint(0, self.btn_cal.height()))
+        screen = QGuiApplication.screenAt(anchor) or self.btn_cal.screen() or QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+
+        x = anchor.x() - dlg.width() + self.btn_cal.width()
+        below_y = anchor.y() + 6
+        above_y = self.btn_cal.mapToGlobal(QPoint(0, 0)).y() - dlg.height() - 6
+
+        if available is not None:
+            if below_y + dlg.height() > available.bottom() and above_y >= available.top():
+                y = above_y
+            else:
+                y = below_y
+            x = max(available.left(), min(x, available.right() - dlg.width()))
+            y = max(available.top(), min(y, available.bottom() - dlg.height()))
+        else:
+            y = below_y
+
+        dlg.move(x, y)
+        dlg.accepted.connect(self._calendar_accepted)
+        dlg.rejected.connect(self._calendar_closed)
+        dlg.destroyed.connect(lambda *_: self._clear_calendar_dialog())
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _calendar_accepted(self):
+        dlg = self._calendar_dialog
+        if dlg is not None and dlg.result_date:
             self.set_value(dlg.result_date)
+        self._clear_calendar_dialog()
+
+    def _calendar_closed(self):
+        self._clear_calendar_dialog()
+
+    def _clear_calendar_dialog(self):
+        self._calendar_dialog = None
 
     def get(self):
         return self._value
@@ -1419,15 +1480,58 @@ class ManageDialog(QDialog):
         r += 1
         form.addWidget(_mk_label("Status"), r, 0)
         status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(16)
         self.open_rb = QRadioButton("Open")
         self.clarif_rb = QRadioButton("Clarification")
         self.closed_rb = QRadioButton("Closed")
-        self.open_rb.setStyleSheet(f"color: {C['open']};")
-        self.clarif_rb.setStyleSheet(f"color: {C['clarif']};")
-        self.closed_rb.setStyleSheet(f"color: {C['closed']};")
+        radio_styles = {
+            self.open_rb: (C["open"], "Open"),
+            self.clarif_rb: (C["clarif"], "Clarification"),
+            self.closed_rb: (C["closed"], "Closed"),
+        }
+        for rb, (accent, _) in radio_styles.items():
+            rb.setCursor(Qt.PointingHandCursor)
+            rb.setStyleSheet(
+                f"""
+                QRadioButton {{
+                    background: {C['surface']};
+                    color: {accent};
+                    border: 1px solid {C['border']};
+                    border-radius: 10px;
+                    padding: 8px 12px;
+                    spacing: 8px;
+                    font-weight: 700;
+                    min-height: 18px;
+                }}
+                QRadioButton:hover {{
+                    background: {C['sel']};
+                    border: 1px solid {accent};
+                }}
+                QRadioButton:checked {{
+                    background: {C['sel']};
+                    border: 1px solid {accent};
+                    color: white;
+                }}
+                QRadioButton::indicator {{
+                    width: 12px;
+                    height: 12px;
+                }}
+                QRadioButton::indicator:unchecked {{
+                    border: 2px solid {C['subtle']};
+                    border-radius: 6px;
+                    background: transparent;
+                }}
+                QRadioButton::indicator:checked {{
+                    border: 2px solid {accent};
+                    border-radius: 6px;
+                    background: {accent};
+                }}
+                """
+            )
         for rb in (self.open_rb, self.clarif_rb, self.closed_rb):
-            status_row.addSpacing(16)
             status_row.addWidget(rb)
+            status_row.addSpacing(8)
         status_row.addStretch(1)
         current = R["status"] or "Open"
         if current == "Open":
@@ -1499,7 +1603,7 @@ class ManageDialog(QDialog):
         footer_row.addWidget(_mk_button("Delete", self._delete, danger=True, width=100))
         footer_row.addStretch(1)
         footer_row.addWidget(_mk_button("Cancel", self.reject, outline=True, width=90))
-        footer_row.addWidget(_mk_button("Save Changes", self._save, width=150))
+        footer_row.addWidget(_mk_button("Save Changes", self._save, width=150, color="#ffffff", text_color="#101828"))
         outer.addWidget(footer)
 
     def _save(self):
@@ -1576,6 +1680,9 @@ class IssueTableWidget(QTableWidget):
         self.customContextMenuRequested.connect(self._open_context_menu)
         self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self._center_delegate = CenteredItemDelegate(self)
+        self.setItemDelegateForColumn(2, self._center_delegate)
+        self.setItemDelegateForColumn(4, self._center_delegate)
         self.configure_columns()
         self.setStyleSheet("QTableWidget::item { padding: 4px; }")
 
@@ -1611,7 +1718,7 @@ class IssueTableWidget(QTableWidget):
                 text = str(row.get(cid, "") or "")
                 item = QTableWidgetItem(text)
                 item.setData(Qt.UserRole, row.get("_db_id"))
-                if cid in {"desc", "solution", "remarks", "system", "type"} or wrap:
+                if cid in {"desc", "solution", "remarks"} or wrap:
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 else:
                     item.setTextAlignment(Qt.AlignCenter)
@@ -1634,7 +1741,7 @@ class IssueTableWidget(QTableWidget):
 
     def adjust_row_heights(self):
         fm = QFontMetrics(self.font())
-        left_align_cols = {"desc", "solution", "remarks", "system", "type"}
+        left_align_cols = {"desc", "solution", "remarks"}
         for r_idx, row in enumerate(self._rows):
             row_h = 32
             for c_idx, (cid, _, _, wrap) in enumerate(self._columns, start=1):
@@ -1735,6 +1842,12 @@ def QColorFromHex(hex_color):
     from PySide6.QtGui import QColor
 
     return QColor(hex_color)
+
+
+class CenteredItemDelegate(QStyledItemDelegate):
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.displayAlignment = Qt.AlignmentFlag.AlignCenter
 
 
 class TabContentFrame(QWidget):
@@ -1999,21 +2112,66 @@ class ExportScopeDialog(QDialog):
     def _build(self):
         self.setStyleSheet(_stylesheet())
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 20, 20, 20)
-        outer.setSpacing(10)
+        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setSpacing(8)
         outer.addWidget(_mk_label("Select Export Scope", bold=True))
         outer.addWidget(_mk_label("Choose which issue types to include in the export:", color=C["subtle"]))
+        outer.addSpacing(2)
 
         self.scope = "Both"
         self.rb_eng = QRadioButton("Engineering Issues Only")
         self.rb_mat = QRadioButton("Material Issues Only")
         self.rb_both = QRadioButton("Both Engineering and Material Issues")
         self.rb_both.setChecked(True)
+        for rb in (self.rb_eng, self.rb_mat, self.rb_both):
+            rb.setCursor(Qt.PointingHandCursor)
+            rb.setStyleSheet(
+                f"""
+                QRadioButton {{
+                    background: {C['surface']};
+                    color: {C['text']};
+                    border: 1px solid {C['border']};
+                    border-radius: 12px;
+                    padding: 12px 14px;
+                    margin: 0px;
+                    spacing: 10px;
+                    font-weight: 600;
+                }}
+                QRadioButton:hover {{
+                    border: 1px solid {C['accent']};
+                    background: {C['sel']};
+                }}
+                QRadioButton:checked {{
+                    border: 1px solid {C['accent']};
+                    background: {C['sel']};
+                    color: white;
+                }}
+                QRadioButton::indicator {{
+                    width: 14px;
+                    height: 14px;
+                }}
+                QRadioButton::indicator:unchecked {{
+                    border: 2px solid {C['subtle']};
+                    border-radius: 7px;
+                    background: transparent;
+                }}
+                QRadioButton::indicator:checked {{
+                    border: 2px solid {C['accent']};
+                    border-radius: 7px;
+                    background: {C['accent']};
+                }}
+                """
+            )
         outer.addWidget(self.rb_eng)
+        outer.addSpacing(4)
         outer.addWidget(self.rb_mat)
+        outer.addSpacing(4)
         outer.addWidget(self.rb_both)
+        outer.addStretch(1)
 
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
         row.addStretch(1)
         row.addWidget(_mk_button("Cancel", self.reject, outline=True, width=90))
         row.addWidget(_mk_button("Export", self._export, width=120))
@@ -2120,7 +2278,7 @@ class AppWindow(QMainWindow):
         side.addWidget(note_card)
         side.addStretch(1)
         side.addWidget(_mk_label("AMAT Production Issue Tracker", color=C["subtle"]))
-        side.addWidget(_mk_label("Made by Sankar | v2.1", color=C["subtle"]))
+        side.addWidget(_mk_label("Made by Sankar | v3.0", color=C["subtle"]))
 
         main = QVBoxLayout()
         main.setSpacing(16)
@@ -2337,7 +2495,7 @@ def main():
     app.setFont(QFont(F["family"], F["size_md"]))
     app.setStyleSheet(_stylesheet())
     win = AppWindow()
-    win.show()
+    win.showMaximized()
     sys.exit(app.exec())
 
 
