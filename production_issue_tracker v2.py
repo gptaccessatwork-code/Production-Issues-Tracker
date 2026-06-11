@@ -17,7 +17,7 @@ from openpyxl.utils import get_column_letter
 from PIL import Image
 from PySide6.QtCore import QDate, QEvent, QSignalBlocker, QSize, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextCharFormat
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QStyledItemDelegate,
+    QStyle,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -1205,11 +1206,22 @@ class CopyPasteDialog(QDialog):
         outer.setSpacing(12)
 
         def block(title, content, h):
-            outer.addWidget(_mk_label(title, bold=True, color=C["header"]))
+            outer.addWidget(_mk_label(title, bold=True, color=C["text"]))
             tb = QPlainTextEdit(self)
             tb.setPlainText(content)
             tb.setReadOnly(True)
             tb.setFixedHeight(h)
+            tb.setStyleSheet(
+                f"""
+                QPlainTextEdit {{
+                    background: {C['entry_bg']};
+                    color: {C['text']};
+                    border: 1px solid {C['border']};
+                    border-radius: 12px;
+                    padding: 8px;
+                }}
+                """
+            )
             outer.addWidget(tb)
             row = QHBoxLayout()
             row.addStretch(1)
@@ -1232,8 +1244,8 @@ class NewIssueDialog(QDialog):
         super().__init__(parent)
         self.tracker_type = tracker_type
         self.setWindowTitle(f"Log New {tracker_type} Issue")
-        self.resize(640, 760)
-        self.setMinimumWidth(620)
+        self.resize(680, 575)
+        self.setMinimumWidth(720)
         self.setModal(True)
         self._build()
 
@@ -1241,14 +1253,14 @@ class NewIssueDialog(QDialog):
         self.setStyleSheet(_stylesheet())
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 18, 22, 18)
-        lay.setSpacing(10)
+        lay.setSpacing(6)
         field_w = 520
 
         lay.addWidget(_mk_label(f"New {self.tracker_type} Issue", bold=True))
 
         form = QGridLayout()
         form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(10)
+        form.setVerticalSpacing(6)
         form.setColumnStretch(0, 0)
         form.setColumnStretch(1, 1)
         lay.addLayout(form)
@@ -1274,6 +1286,7 @@ class NewIssueDialog(QDialog):
         sys_box.addWidget(sys_hint)
         sys_wrap = QWidget()
         sys_wrap.setLayout(sys_box)
+        sys_wrap.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         form.addWidget(sys_wrap, r, 1)
 
         r += 1
@@ -1307,6 +1320,7 @@ class NewIssueDialog(QDialog):
         desc_box.addWidget(desc_hint)
         desc_wrap = QWidget()
         desc_wrap.setLayout(desc_box)
+        desc_wrap.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         form.addWidget(desc_wrap, r, 1)
 
         r += 1
@@ -1657,6 +1671,12 @@ class IssueTableWidget(QTableWidget):
         self._rows = []
         self._columns = TABLE_COLS
         self._col_index_by_id = {cid: idx + 1 for idx, (cid, *_rest) in enumerate(self._columns)}
+        self.current_cell = (-1, -1)
+        self._flash_cells = set()
+        self._flash_border_color = QColor("#ffd76a")
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setSingleShot(True)
+        self._flash_timer.timeout.connect(self._clear_flash_cells)
         self._build()
 
     def _build(self):
@@ -1681,10 +1701,10 @@ class IssueTableWidget(QTableWidget):
         self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._center_delegate = CenteredItemDelegate(self)
-        self.setItemDelegateForColumn(2, self._center_delegate)
-        self.setItemDelegateForColumn(4, self._center_delegate)
+        self.setItemDelegate(self._center_delegate)
         self.configure_columns()
         self.setStyleSheet("QTableWidget::item { padding: 4px; }")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def configure_columns(self):
         self.setColumnWidth(0, 40)
@@ -1702,6 +1722,8 @@ class IssueTableWidget(QTableWidget):
         self._rows = []
         self.blockSignals(False)
         self.clear_sort_indicator()
+        self.current_cell = (-1, -1)
+        self._clear_flash_cells()
 
     def load_rows(self, rows):
         self.clear_table()
@@ -1718,7 +1740,9 @@ class IssueTableWidget(QTableWidget):
                 text = str(row.get(cid, "") or "")
                 item = QTableWidgetItem(text)
                 item.setData(Qt.UserRole, row.get("_db_id"))
-                if cid in {"desc", "solution", "remarks"} or wrap:
+                if cid in {"system", "type"}:
+                    item.setTextAlignment(Qt.AlignCenter)
+                elif cid in {"desc", "solution", "remarks"} or wrap:
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 else:
                     item.setTextAlignment(Qt.AlignCenter)
@@ -1738,6 +1762,7 @@ class IssueTableWidget(QTableWidget):
         self.adjust_row_heights()
         self.clearSelection()
         self.setSortingEnabled(False)
+        self.viewport().update()
 
     def adjust_row_heights(self):
         fm = QFontMetrics(self.font())
@@ -1786,7 +1811,30 @@ class IssueTableWidget(QTableWidget):
 
     def _copy_item_text(self, item):
         if item is not None and item.text():
+            self.current_cell = (item.row(), item.column())
             QApplication.clipboard().setText(item.text())
+            self.viewport().update()
+
+    def _flash_cell(self, row, column):
+        self._flash_cells = {(row, column)}
+        self.viewport().update()
+        self._flash_timer.start(220)
+
+    def _clear_flash_cells(self):
+        if self._flash_cells:
+            self._flash_cells.clear()
+            self.viewport().update()
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.StandardKey.Copy):
+            item = self.currentItem()
+            if item is not None and item.text():
+                self.current_cell = (item.row(), item.column())
+                QApplication.clipboard().setText(item.text())
+                self._flash_cell(item.row(), item.column())
+                self.viewport().update()
+                return
+        super().keyPressEvent(event)
 
     def _double_clicked(self, item):
         if item is None:
@@ -1845,9 +1893,20 @@ def QColorFromHex(hex_color):
 
 
 class CenteredItemDelegate(QStyledItemDelegate):
-    def initStyleOption(self, option, index):
-        super().initStyleOption(option, index)
-        option.displayAlignment = Qt.AlignmentFlag.AlignCenter
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        table = self.parent()
+        if table is None:
+            return
+        cell_key = (index.row(), index.column())
+        rect = option.rect.adjusted(1, 1, -1, -1)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if cell_key == getattr(table, "current_cell", (-1, -1)):
+            border_color = table._flash_border_color if cell_key in getattr(table, "_flash_cells", set()) else QColor(C["accent"])
+            painter.setPen(QPen(border_color, 2))
+            painter.drawRoundedRect(rect, 6, 6)
+        painter.restore()
 
 
 class TabContentFrame(QWidget):
@@ -2278,7 +2337,7 @@ class AppWindow(QMainWindow):
         side.addWidget(note_card)
         side.addStretch(1)
         side.addWidget(_mk_label("AMAT Production Issue Tracker", color=C["subtle"]))
-        side.addWidget(_mk_label("Made by Sankar | v3.0", color=C["subtle"]))
+        side.addWidget(_mk_label("Made by Sankar | v3.1", color=C["subtle"]))
 
         main = QVBoxLayout()
         main.setSpacing(16)
