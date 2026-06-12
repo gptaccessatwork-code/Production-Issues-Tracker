@@ -1378,9 +1378,11 @@ class ManageDialog(QDialog):
         field_w = 520
         label_w = 125
 
-        scroll = QScrollArea(self)
+        scroll = SmoothScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.verticalScrollBar().setSingleStep(8)
+        scroll.horizontalScrollBar().setSingleStep(8)
         outer.addWidget(scroll)
 
         content = QWidget()
@@ -1702,9 +1704,23 @@ class IssueTableWidget(QTableWidget):
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._center_delegate = CenteredItemDelegate(self)
         self.setItemDelegate(self._center_delegate)
+        self.verticalScrollBar().setSingleStep(8)
+        self.horizontalScrollBar().setSingleStep(8)
         self.configure_columns()
         self.setStyleSheet("QTableWidget::item { padding: 4px; }")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            super().wheelEvent(event)
+            return
+        delta = event.pixelDelta().y() if not event.pixelDelta().isNull() else event.angleDelta().y()
+        if delta == 0:
+            super().wheelEvent(event)
+            return
+        bar = self.verticalScrollBar()
+        bar.setValue(_smooth_wheel_step(delta, bar.value()))
+        event.accept()
 
     def configure_columns(self):
         self.setColumnWidth(0, 40)
@@ -1907,6 +1923,28 @@ class CenteredItemDelegate(QStyledItemDelegate):
             painter.setPen(QPen(border_color, 2))
             painter.drawRoundedRect(rect, 6, 6)
         painter.restore()
+
+
+def _smooth_wheel_step(delta_y, current_value):
+    if delta_y == 0:
+        return current_value
+    # Smaller-than-default wheel increments feel noticeably smoother.
+    step = max(6, int(abs(delta_y) / 4))
+    return current_value - step if delta_y > 0 else current_value + step
+
+
+class SmoothScrollArea(QScrollArea):
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            super().wheelEvent(event)
+            return
+        delta = event.pixelDelta().y() if not event.pixelDelta().isNull() else event.angleDelta().y()
+        if delta == 0:
+            super().wheelEvent(event)
+            return
+        bar = self.verticalScrollBar()
+        bar.setValue(_smooth_wheel_step(delta, bar.value()))
+        event.accept()
 
 
 class TabContentFrame(QWidget):
@@ -2337,7 +2375,7 @@ class AppWindow(QMainWindow):
         side.addWidget(note_card)
         side.addStretch(1)
         side.addWidget(_mk_label("AMAT Production Issue Tracker", color=C["subtle"]))
-        side.addWidget(_mk_label("Made by Sankar | v3.1", color=C["subtle"]))
+        side.addWidget(_mk_label("Made by Sankar | v3.2", color=C["subtle"]))
 
         main = QVBoxLayout()
         main.setSpacing(16)
