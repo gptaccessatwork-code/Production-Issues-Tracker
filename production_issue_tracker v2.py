@@ -102,7 +102,7 @@ TABLE_COLS = [
     ("remarks", "Remarks", 530, True),
 ]
 
-FAMILIES = ["FEP", "DDP", "ETCH", "MDP", "EPI"]
+FAMILIES = ["FEP", "DDP", "ETCH", "MDP", "EPI", "SPOTBUY/SPARES"]
 ISSUE_TYPES = [
     "BOM Error",
     "Document Discrepancy",
@@ -119,7 +119,9 @@ if getattr(sys, "frozen", False):
 else:
     _HERE = os.path.dirname(os.path.abspath(__file__))
 
-DB_PATH = os.path.join(_HERE, "production_issues.db")
+# Use the shared drive database so the app can run locally while reading/writing
+# the central issue tracker data.
+DB_PATH = r"S:\Engineering\003 AMAT Products\AMAT Production Issues\production_issues.db"
 LOGO_PATH = os.path.join(_HERE, "logo.png")
 
 MONTH_NAMES = ["All"] + [datetime.date(2000, m, 1).strftime("%B") for m in range(1, 13)]
