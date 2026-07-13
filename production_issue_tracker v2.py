@@ -10,12 +10,13 @@ import datetime
 import os
 import sqlite3
 import sys
+from collections import defaultdict
 
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from PIL import Image
-from PySide6.QtCore import QDate, QEvent, QSignalBlocker, QSize, QPoint, Qt, QTimer, Signal
+from openpyxl.worksheet.datavalidation import DataValidation
+from PySide6.QtCore import QDate, QSignalBlocker, QSize, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
@@ -42,7 +43,6 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QStyledItemDelegate,
-    QStyle,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -126,6 +126,35 @@ LOGO_PATH = os.path.join(_HERE, "logo.png")
 
 MONTH_NAMES = ["All"] + [datetime.date(2000, m, 1).strftime("%B") for m in range(1, 13)]
 YEAR_OPTS = ["All"] + [str(y) for y in range(2022, datetime.date.today().year + 3)]
+TREND_MONTHS = [calendar.month_abbr[i] for i in range(1, 13)]
+BULK_IMPORT_COLORS = ["#60a5fa", "#34d399", "#f59e0b", "#f472b6", "#a78bfa", "#22d3ee", "#f87171", "#cbd5e1"]
+TREND_ISSUE_COLORS = {
+    "BOM Error": "#34d399",
+    "Document Discrepancy": "#60a5fa",
+    "Document Error": "#f59e0b",
+    "Missing Document": "#f472b6",
+    "Design Error": "#a78bfa",
+    "Request for Deviation": "#22d3ee",
+    "Others": "#fb7185",
+}
+BULK_IMPORT_HEADERS = [
+    "Date Reported",
+    "System Number",
+    "Product Family",
+    "Issue Type",
+    "Issue Description",
+    "SPS Number",
+    "NCR Number",
+    "Status",
+    "Solution",
+    "Solution Date",
+    "CRF",
+    "ESW",
+    "SCV",
+    "Remarks",
+    "Tracker Type",
+]
+BULK_IMPORT_TEMPLATE_PREFIX = "PIT_Bulk_Import_Template"
 
 
 # -----------------------------------------------------------------------------
@@ -138,6 +167,286 @@ def _db():
 
 def _row_factory(cursor, row):
     return dict(zip([d[0] for d in cursor.description], row))
+
+
+def _normalize_key(value):
+    return "".join(ch for ch in str(value or "").strip().lower() if ch.isalnum())
+
+
+def _clean_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def _coerce_date_to_iso(value):
+    if not value:
+        return ""
+    if isinstance(value, datetime.datetime):
+        return value.date().strftime("%Y-%m-%d")
+    if isinstance(value, datetime.date):
+        return value.strftime("%Y-%m-%d")
+    text = _clean_text(value)
+    if not text:
+        return ""
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return text
+
+
+def _resolve_choice(value, allowed_values):
+    text = _clean_text(value)
+    if not text:
+        return ""
+    norm = _normalize_key(text)
+    for allowed in allowed_values:
+        if _normalize_key(allowed) == norm:
+            return allowed
+    return text
+
+
+def _available_issue_years(tracker_type=None):
+    q = "SELECT DISTINCT strftime('%Y', date_reported) AS y FROM issues WHERE date_reported<>''"
+    args = []
+    if tracker_type in TRACKER_TYPES:
+        q += " AND tracker_type=?"
+        args.append(tracker_type)
+    q += " ORDER BY y DESC"
+    with _db() as c:
+        years = [r[0] for r in c.execute(q, args).fetchall() if r and r[0]]
+    if not years:
+        years = [str(datetime.date.today().year)]
+    return years
+
+
+def _bulk_import_template_path():
+    return os.path.join(_HERE, f"{BULK_IMPORT_TEMPLATE_PREFIX}.xlsx")
+
+
+def create_bulk_import_template(filepath):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Bulk Import"
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(BULK_IMPORT_HEADERS))}1"
+
+    header_fill = PatternFill("solid", fgColor="1B5DA8")
+    header_font = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for col_idx, header in enumerate(BULK_IMPORT_HEADERS, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center
+        ws.column_dimensions[get_column_letter(col_idx)].width = {
+            "Date Reported": 14,
+            "System Number": 24,
+            "Product Family": 16,
+            "Issue Type": 20,
+            "Issue Description": 55,
+            "SPS Number": 14,
+            "NCR Number": 14,
+            "Status": 14,
+            "Solution": 55,
+            "Solution Date": 14,
+            "CRF": 12,
+            "ESW": 12,
+            "SCV": 12,
+            "Remarks": 35,
+            "Tracker Type": 16,
+        }.get(header, 18)
+
+    ws.row_dimensions[1].height = 24
+
+    dv_family = DataValidation(type="list", formula1=f'"{",".join(FAMILIES)}"', allow_blank=True)
+    dv_issue = DataValidation(type="list", formula1=f'"{",".join(ISSUE_TYPES)}"', allow_blank=True)
+    dv_status = DataValidation(type="list", formula1='"Open,Clarification,Closed"', allow_blank=True)
+    dv_tracker = DataValidation(type="list", formula1=f'"{",".join(TRACKER_TYPES)}"', allow_blank=True)
+    ws.add_data_validation(dv_family)
+    ws.add_data_validation(dv_issue)
+    ws.add_data_validation(dv_status)
+    ws.add_data_validation(dv_tracker)
+    dv_family.add("C2:C5000")
+    dv_issue.add("D2:D5000")
+    dv_status.add("H2:H5000")
+    dv_tracker.add("O2:O5000")
+
+    thin_wrap = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    date_fmt = "yyyy-mm-dd"
+    for row_idx in range(2, 5001):
+        ws.cell(row_idx, 1).number_format = date_fmt
+        ws.cell(row_idx, 5).alignment = thin_wrap
+        ws.cell(row_idx, 9).alignment = thin_wrap
+        ws.cell(row_idx, 10).number_format = date_fmt
+        ws.cell(row_idx, 14).alignment = thin_wrap
+
+    center_cols = [2, 3, 4, 6, 7, 8, 11, 12, 13, 15]
+    for row_idx in range(2, 5001):
+        for col_idx in center_cols:
+            ws.cell(row_idx, col_idx).alignment = Alignment(horizontal="center", vertical="center")
+
+    tips = wb.create_sheet("Instructions")
+    tips.column_dimensions["A"].width = 92
+    for idx, text in enumerate(
+        [
+            "Fill one issue per row on the Bulk Import sheet.",
+            "Leave any field blank if you do not want to populate it.",
+            "Status defaults to Open when left blank.",
+            "Tracker Type defaults to the active workspace when left blank.",
+            "Date Reported and Solution Date accept Excel dates or ISO dates like 2026-07-10.",
+            "Issue Description, Solution, and Remarks wrap text automatically.",
+        ],
+        1,
+    ):
+        tips.cell(idx, 1, text)
+
+    wb.save(filepath)
+
+
+def import_bulk_issues(filepath, default_tracker_type="Engineering"):
+    wb = openpyxl.load_workbook(filepath, data_only=True)
+    ws = None
+    header_map = {}
+    required_keys = [_normalize_key(h) for h in [
+        "Date Reported",
+        "System Number",
+        "Product Family",
+        "Issue Type",
+        "Issue Description",
+        "SPS Number",
+    ]]
+    for candidate in wb.worksheets:
+        for row in candidate.iter_rows(min_row=1, max_row=min(10, candidate.max_row), values_only=True):
+            if not row:
+                continue
+            candidate_map = {_normalize_key(v): idx for idx, v in enumerate(row) if _normalize_key(v)}
+            if candidate_map and all(key in candidate_map for key in required_keys):
+                ws = candidate
+                header_map = candidate_map
+                break
+        if ws is not None:
+            break
+
+    if ws is None or not header_map:
+        raise ValueError("Could not find a header row in the workbook.")
+
+    imported = 0
+    skipped = []
+    inserts = []
+    for excel_row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        if not row or all(cell is None or _clean_text(cell) == "" for cell in row):
+            continue
+
+        def cell(name):
+            idx = header_map.get(_normalize_key(name))
+            if idx is None or idx >= len(row):
+                return None
+            return row[idx]
+
+        d = _coerce_date_to_iso(cell("Date Reported"))
+        sys_num = _clean_text(cell("System Number"))
+        family = _resolve_choice(cell("Product Family"), FAMILIES)
+        issue_type = _resolve_choice(cell("Issue Type"), ISSUE_TYPES)
+        issue_desc = _clean_text(cell("Issue Description"))
+        sps = _clean_text(cell("SPS Number"))
+        ncr = _clean_text(cell("NCR Number"))
+        status = _resolve_choice(cell("Status"), ["Open", "Clarification", "Closed"]) or "Open"
+        solution = _clean_text(cell("Solution"))
+        solution_date = _coerce_date_to_iso(cell("Solution Date"))
+        crf = _clean_text(cell("CRF"))
+        esw = _clean_text(cell("ESW"))
+        scv = _clean_text(cell("SCV"))
+        remarks = _clean_text(cell("Remarks"))
+        tracker_type = _resolve_choice(cell("Tracker Type"), TRACKER_TYPES) or default_tracker_type
+
+        inserts.append((d, sys_num, family, issue_type, issue_desc, sps, ncr, status, solution, solution_date, crf, esw, scv, remarks, tracker_type))
+
+    if not inserts:
+        return 0, skipped
+
+    with _db() as c:
+        c.executemany(
+            """
+            INSERT INTO issues
+            (date_reported, system_number, product_family, issue_type,
+             issue_desc, sps_number, ncr_number, status,
+             solution, solution_date, crf, esw, scv, remarks, tracker_type)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            inserts,
+        )
+        imported = len(inserts)
+
+    return imported, skipped
+
+
+def fetch_trend_data(tracker_scope="All", year_scope="All", month_scope="All", dimension="issue_type"):
+    group_col = "issue_type" if dimension == "issue_type" else "product_family"
+    params = []
+    base_where = ["date_reported<>''"]
+    if tracker_scope in TRACKER_TYPES:
+        base_where.append("tracker_type=?")
+        params.append(tracker_scope)
+
+    if year_scope != "All":
+        base_where.append("strftime('%Y', date_reported)=?")
+        params.append(year_scope)
+
+    if month_scope != "All":
+        month_idx = datetime.datetime.strptime(month_scope, "%B").month
+        base_where.append("CAST(strftime('%m', date_reported) AS INTEGER)=?")
+        params.append(month_idx)
+
+    where_sql = " AND ".join(base_where)
+    with _db() as c:
+        q = f"""
+            SELECT CAST(strftime('%m', date_reported) AS INTEGER) AS month_idx,
+                   {group_col} AS bucket,
+                   COUNT(*) AS cnt
+            FROM issues
+            WHERE {where_sql}
+            GROUP BY month_idx, bucket
+        """
+        rows = c.execute(q, params).fetchall()
+
+    months = {i: defaultdict(int) for i in range(1, 13)}
+    totals_by_bucket = defaultdict(int)
+    if month_scope != "All":
+        month_counts = defaultdict(int)
+        for month_idx, bucket, cnt in rows:
+            bucket = bucket or "Unspecified"
+            month_counts[bucket] += cnt
+            totals_by_bucket[bucket] += cnt
+        return {
+            "mode": "month",
+            "dimension": dimension,
+            "tracker_scope": tracker_scope,
+            "year_scope": year_scope,
+            "month_scope": month_scope,
+            "buckets": month_counts,
+            "totals": dict(totals_by_bucket),
+        }
+
+    for month_idx, bucket, cnt in rows:
+        bucket = bucket or "Unspecified"
+        months[int(month_idx or 0)][bucket] += cnt
+        totals_by_bucket[bucket] += cnt
+
+    return {
+        "mode": "year",
+        "dimension": dimension,
+        "tracker_scope": tracker_scope,
+        "year_scope": year_scope,
+        "month_scope": month_scope,
+        "months": {m: dict(months[m]) for m in range(1, 13)},
+        "totals": dict(totals_by_bucket),
+    }
 
 
 def init_db():
@@ -1060,7 +1369,7 @@ class CalendarDialog(QDialog):
                 self.year_combo.setCurrentIndex(year_index)
 
     def _jump_to_page(self):
-        self.calendar.setCurrentPage(self.year_combo.currentText().__int__() if False else int(self.year_combo.currentText()), self.month_combo.currentIndex() + 1)
+        self.calendar.setCurrentPage(int(self.year_combo.currentText()), self.month_combo.currentIndex() + 1)
 
     def _prev_month(self):
         year = self.calendar.yearShown()
@@ -1949,6 +2258,318 @@ class SmoothScrollArea(QScrollArea):
         event.accept()
 
 
+class TrendChartWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._data = None
+        self.setMinimumHeight(460)
+
+    def set_data(self, data):
+        self._data = data or None
+        self.update()
+
+    def _category_order(self, dimension, data):
+        if dimension == "issue_type":
+            base = ISSUE_TYPES
+        else:
+            base = FAMILIES
+        extras = []
+        if data:
+            for bucket in data.get("totals", {}).keys():
+                if bucket not in base and bucket not in extras:
+                    extras.append(bucket)
+        return base + extras
+
+    def _palette_for(self, categories):
+        colors = {}
+        for idx, category in enumerate(categories):
+            if category in TREND_ISSUE_COLORS:
+                colors[category] = QColor(TREND_ISSUE_COLORS[category])
+            else:
+                colors[category] = QColor(BULK_IMPORT_COLORS[idx % len(BULK_IMPORT_COLORS)])
+        return colors
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor(C["surface"]))
+
+        data = self._data
+        if not data:
+            painter.setPen(QColor(C["subtle"]))
+            painter.drawText(self.rect(), Qt.AlignCenter, "No trend data available.")
+            return
+
+        title = "Issue Trend"
+        if data["dimension"] == "product_family":
+            title = "Product Family Trend"
+        subtitle = "Year overview"
+        scope_bits = []
+        if data.get("tracker_scope") and data["tracker_scope"] != "All":
+            scope_bits.append(data["tracker_scope"])
+        if data.get("year_scope") and data["year_scope"] != "All":
+            scope_bits.append(data["year_scope"])
+        if data.get("month_scope") and data["month_scope"] != "All":
+            scope_bits.append(data["month_scope"])
+        if scope_bits:
+            subtitle = f"{subtitle} | " + " | ".join(scope_bits)
+
+        fm = painter.fontMetrics()
+        outer = self.rect().adjusted(18, 18, -18, -18)
+        title_font = QFont(F["family"], F["size_lg"])
+        title_font.setBold(True)
+        painter.setPen(QColor(C["text"]))
+        painter.setFont(title_font)
+        painter.drawText(QRectF(outer.left(), outer.top(), outer.width(), 26), Qt.AlignLeft | Qt.AlignVCenter, title)
+        painter.setFont(QFont(F["family"], F["size_sm"]))
+        painter.setPen(QColor(C["subtle"]))
+        painter.drawText(QRectF(outer.left(), outer.top() + 24, outer.width(), 22), Qt.AlignLeft | Qt.AlignVCenter, subtitle)
+
+        chart_rect = QRectF(outer.left(), outer.top() + 58, outer.width(), outer.height() - 58)
+        painter.setPen(QPen(QColor(C["border"]), 1))
+        painter.setBrush(QColor(11, 18, 32, 220))
+        painter.drawRoundedRect(chart_rect, 18, 18)
+
+        inner = chart_rect.adjusted(20, 20, -20, -20)
+        categories = self._category_order(data["dimension"], data)
+        palette = self._palette_for(categories)
+
+        legend_items = [c for c in categories if data.get("totals", {}).get(c, 0)]
+        if not legend_items:
+            legend_items = categories[:]
+
+        legend_y = inner.top()
+        legend_x = inner.left()
+        legend_row_h = 20
+        legend_gap = 18
+        legend_row_gap = 6
+        legend_rows = 1
+        line_bottom = legend_y + legend_row_h
+        for category in legend_items:
+            label_w = fm.horizontalAdvance(category)
+            item_w = 12 + 8 + label_w
+            if legend_x > inner.left() and (legend_x + item_w) > inner.right():
+                legend_x = inner.left()
+                legend_y += legend_row_h + legend_row_gap
+                legend_rows += 1
+                line_bottom = legend_y + legend_row_h
+
+            swatch = QRectF(legend_x, legend_y + 4, 12, 12)
+            painter.setBrush(palette.get(category, QColor(C["subtle"])))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(swatch, 3, 3)
+            painter.setPen(QColor(C["text"]))
+            label_rect = QRectF(legend_x + 20, legend_y, item_w - 20, legend_row_h)
+            painter.drawText(label_rect, Qt.AlignLeft | Qt.AlignVCenter, category)
+            legend_x += item_w + legend_gap
+
+        plot_top = line_bottom + 16
+        plot_rect = QRectF(inner.left(), plot_top, inner.width(), inner.bottom() - plot_top)
+        if data["mode"] == "year":
+            self._paint_year(painter, plot_rect, data, categories, palette)
+        else:
+            self._paint_month(painter, plot_rect, data, categories, palette)
+
+    def _paint_year(self, painter, rect, data, categories, palette):
+        months = [data["months"].get(i, {}) for i in range(1, 13)]
+        month_totals = [sum(month.values()) for month in months]
+        max_total = max(month_totals) if month_totals else 0
+        if max_total <= 0:
+            painter.setPen(QColor(C["subtle"]))
+            painter.drawText(rect.toRect(), Qt.AlignCenter, "No issues found for the selected filters.")
+            return
+
+        left = rect.left() + 36
+        top = rect.top() + 10
+        right = rect.right() - 10
+        bottom = rect.bottom() - 30
+        chart = QRectF(left, top, right - left, bottom - top)
+        axis_pen = QPen(QColor(C["border"]), 1)
+        grid_pen = QPen(QColor("#20314f"), 1)
+        painter.setPen(axis_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(chart)
+
+        steps = 4
+        for step_idx in range(steps + 1):
+            y = chart.bottom() - (chart.height() * step_idx / steps)
+            value = int(max_total * step_idx / steps)
+            painter.setPen(grid_pen)
+            painter.drawLine(chart.left(), y, chart.right(), y)
+            painter.setPen(QColor(C["subtle"]))
+            painter.drawText(QRectF(rect.left(), y - 10, 30, 18), Qt.AlignRight | Qt.AlignVCenter, str(value))
+
+        month_w = chart.width() / 12.0
+        active_categories = [c for c in categories if any(month.get(c, 0) for month in months)]
+        if not active_categories:
+            active_categories = categories[:]
+        group_w = month_w * 0.76
+        gap = 3
+        bar_w = max(8, (group_w - gap * max(0, len(active_categories) - 1)) / max(1, len(active_categories)))
+        for month_idx, month_data in enumerate(months, start=1):
+            group_left = chart.left() + (month_idx - 1) * month_w + (month_w - group_w) / 2
+            total = sum(month_data.values())
+            if total <= 0:
+                painter.setPen(QColor(C["subtle"]))
+                painter.drawText(QRectF(group_left - 6, chart.bottom() + 6, group_w + 12, 18), Qt.AlignCenter, TREND_MONTHS[month_idx - 1])
+                continue
+
+            tallest = 0
+            for cat_idx, category in enumerate(active_categories):
+                count = month_data.get(category, 0)
+                if not count:
+                    continue
+                segment_h = chart.height() * (count / max_total)
+                tallest = max(tallest, segment_h)
+                x = group_left + cat_idx * (bar_w + gap)
+                seg_rect = QRectF(x, chart.bottom() - segment_h, bar_w, segment_h)
+                painter.setPen(QPen(QColor("#1d2b44"), 1))
+                painter.setBrush(palette.get(category, QColor(C["subtle"])))
+                painter.drawRoundedRect(seg_rect, 4, 4)
+                if segment_h >= 16:
+                    painter.setPen(QColor(C["bg"]))
+                    painter.drawText(seg_rect, Qt.AlignCenter, str(count))
+
+            painter.setPen(QColor(C["text"]))
+            label_x = group_left - 6
+            painter.drawText(QRectF(label_x, chart.bottom() + 6, group_w + 12, 18), Qt.AlignCenter, TREND_MONTHS[month_idx - 1])
+            painter.setPen(QColor(C["subtle"]))
+            painter.drawText(QRectF(label_x, chart.bottom() - tallest - 22, group_w + 12, 18), Qt.AlignCenter, str(total))
+
+    def _paint_month(self, painter, rect, data, categories, palette):
+        buckets = data.get("buckets", {})
+        ordered = [c for c in categories if buckets.get(c, 0)]
+        if not ordered:
+            ordered = categories
+        max_total = max([buckets.get(c, 0) for c in ordered] or [0])
+        if max_total <= 0:
+            painter.setPen(QColor(C["subtle"]))
+            painter.drawText(rect.toRect(), Qt.AlignCenter, "No issues found for the selected filters.")
+            return
+
+        label_w = 180
+        value_w = 60
+        bar_left = rect.left() + label_w
+        bar_right = rect.right() - value_w
+        row_h = max(28, rect.height() / max(1, len(ordered)))
+        axis_pen = QPen(QColor(C["border"]), 1)
+        painter.setPen(axis_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRectF(bar_left, rect.top(), bar_right - bar_left, min(rect.height(), row_h * len(ordered))))
+
+        for idx, category in enumerate(ordered):
+            y = rect.top() + idx * row_h + 5
+            value = buckets.get(category, 0)
+            painter.setPen(QColor(C["text"]))
+            painter.drawText(QRectF(rect.left(), y, label_w - 14, 18), Qt.AlignRight | Qt.AlignVCenter, category)
+            bar_w = (bar_right - bar_left) * (value / max_total)
+            bar_rect = QRectF(bar_left, y, bar_w, min(20, row_h - 10))
+            painter.setPen(QPen(QColor("#1d2b44"), 1))
+            painter.setBrush(palette.get(category, QColor(C["subtle"])))
+            painter.drawRoundedRect(bar_rect, 5, 5)
+            painter.setPen(QColor(C["subtle"]))
+            painter.drawText(QRectF(bar_right + 6, y, value_w - 6, 18), Qt.AlignLeft | Qt.AlignVCenter, str(value))
+
+
+class TrendShowcaseDialog(QDialog):
+    def __init__(self, parent, tracker_scope="All"):
+        super().__init__(parent)
+        self.setWindowTitle("Trend Showcase")
+        self.setModal(True)
+        self.resize(1180, 780)
+        self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+        self._default_tracker_scope = tracker_scope if tracker_scope in TRACKER_TYPES else "All"
+        self._build()
+        self.refresh_chart()
+
+    def _build(self):
+        self.setStyleSheet(_stylesheet())
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
+
+        header = _card("Trend Showcase")
+        header_lay = header.layout()
+        header_lay.addWidget(_mk_label("See issue volume by month, grouped by issue type or product family.", color=C["subtle"]))
+        outer.addWidget(header)
+
+        control_card = _card("Controls")
+        control_lay = QGridLayout()
+        control_lay.setContentsMargins(0, 0, 0, 0)
+        control_lay.setHorizontalSpacing(10)
+        control_lay.setVerticalSpacing(10)
+        control_card.layout().addLayout(control_lay)
+
+        self.scope_combo = self._combo(["All"] + TRACKER_TYPES)
+        self.scope_combo.setCurrentText(self._default_tracker_scope)
+        self.year_combo = self._combo(["All"] + _available_issue_years())
+        self.dimension_combo = self._combo(["Issue Type", "Product Family"])
+        current_year = str(datetime.date.today().year)
+        self.year_combo.setCurrentText(current_year)
+
+        for combo in [self.scope_combo, self.year_combo, self.dimension_combo]:
+            combo.currentTextChanged.connect(self.refresh_chart)
+
+        self._wire(control_lay, "Tracker Scope", self.scope_combo, 0)
+        self._wire(control_lay, "Year", self.year_combo, 2)
+        self._wire(control_lay, "Breakdown", self.dimension_combo, 4)
+        self.refresh_btn = _mk_button("Refresh", self.refresh_chart, outline=True, width=100)
+        control_lay.addWidget(self.refresh_btn, 0, 6)
+        control_lay.setColumnStretch(7, 1)
+        outer.addWidget(control_card)
+
+        summary = QHBoxLayout()
+        summary.setSpacing(10)
+        self.total_card = _metric_card("Total", "0", accent=C["accent"])
+        self.peak_card = _metric_card("Peak Month", "-", accent=C["open"])
+        self.top_card = _metric_card("Top Issue Type", "-", accent=C["closed"])
+        for card in [self.total_card, self.peak_card, self.top_card]:
+            summary.addWidget(card)
+        outer.addLayout(summary)
+
+        self.chart = TrendChartWidget(self)
+        outer.addWidget(self.chart, 1)
+
+    def _combo(self, items):
+        combo = FilterDropdown(items, self)
+        combo.setMinimumWidth(150)
+        return combo
+
+    def _wire(self, row, label, combo, col):
+        row.addWidget(_mk_label(label, color=C["subtle"]), 0, col)
+        row.addWidget(combo, 0, col + 1)
+
+    def refresh_chart(self, *_):
+        dimension = "issue_type" if self.dimension_combo.currentText() == "Issue Type" else "product_family"
+        tracker_scope = self.scope_combo.currentText()
+        year_scope = self.year_combo.currentText()
+        data = fetch_trend_data(tracker_scope, year_scope, "All", dimension)
+        self.chart.set_data(data)
+
+        totals = data.get("totals", {})
+        total_count = sum(totals.values())
+        self.total_card._value_label.setText(str(total_count))
+
+        month_totals = data.get("months", {})
+        peak_idx = None
+        peak_val = 0
+        for idx, month_map in month_totals.items():
+            val = sum(month_map.values())
+            if val > peak_val:
+                peak_val = val
+                peak_idx = idx
+        self.peak_card._value_label.setText(TREND_MONTHS[(peak_idx or 1) - 1] if peak_idx else "-")
+
+        if totals:
+            top_bucket = max(totals, key=totals.get)
+            self.top_card._value_label.setText(f"{top_bucket} ({totals[top_bucket]})")
+            top_color = TREND_ISSUE_COLORS.get(top_bucket, C["closed"])
+            self.top_card._value_label.setStyleSheet(f"font-size: 18pt; color: {top_color};")
+        else:
+            self.top_card._value_label.setText("-")
+            self.top_card._value_label.setStyleSheet(f"font-size: 18pt; color: {C['closed']};")
+
+
 class TabContentFrame(QWidget):
     def __init__(self, parent, tracker_type, on_double_click, on_sort, on_new_issue, on_delete_issue):
         super().__init__(parent)
@@ -2290,6 +2911,8 @@ class AppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self._tab_frames = {}
+        self._bulk_import_path = None
+        self._bulk_import_waiting = False
         self.setWindowTitle(WIN_TITLE)
         self.resize(*WIN_SIZE)
         self.setMinimumSize(*WIN_MIN)
@@ -2349,9 +2972,13 @@ class AppWindow(QMainWindow):
         action_card = _card("Quick Actions")
         action_lay = action_card.layout()
         self.quick_new_btn = _mk_button("New Issue", self._quick_new_issue, width=240)
+        self.quick_trend_btn = _mk_button("Trend Showcase", self.show_trend_showcase, outline=True, width=240)
+        self.quick_bulk_import_btn = _mk_button("Bulk Import", self.import_bulk_issues, outline=True, width=240)
         self.quick_refresh_btn = _mk_button("Refresh All", self.refresh_all_tabs, outline=True, width=240)
         self.quick_export_btn = _mk_button("Export Excel", self.export_data, outline=True, width=240)
         action_lay.addWidget(self.quick_new_btn)
+        action_lay.addWidget(self.quick_trend_btn)
+        action_lay.addWidget(self.quick_bulk_import_btn)
         action_lay.addWidget(self.quick_refresh_btn)
         action_lay.addWidget(self.quick_export_btn)
         side.addWidget(action_card)
@@ -2377,7 +3004,7 @@ class AppWindow(QMainWindow):
         side.addWidget(note_card)
         side.addStretch(1)
         side.addWidget(_mk_label("AMAT Production Issue Tracker", color=C["subtle"]))
-        side.addWidget(_mk_label("Made by Sankar | v3.2", color=C["subtle"]))
+        side.addWidget(_mk_label("Made by Sankar | v4", color=C["subtle"]))
 
         main = QVBoxLayout()
         main.setSpacing(16)
@@ -2512,7 +3139,6 @@ class AppWindow(QMainWindow):
         self._sync_sidebar()
 
     def on_table_sort(self, tracker_type, col_id, reverse):
-        # Kept for parity and potential future header state sync.
         return
 
     def export_data(self):
@@ -2584,6 +3210,101 @@ class AppWindow(QMainWindow):
 
     def _quick_new_issue(self):
         self.new_issue(self.current_tracker_type())
+
+    def show_trend_showcase(self):
+        dlg = TrendShowcaseDialog(self, tracker_scope=self.current_tracker_type())
+        dlg.exec()
+
+    def create_bulk_template_file(self):
+        path = _bulk_import_template_path()
+        try:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            create_bulk_import_template(path)
+            try:
+                os.startfile(path)
+            except Exception:
+                pass
+            QMessageBox.information(
+                self,
+                "Bulk Import Template",
+                "A fresh bulk import template has been created and opened.\n\n"
+                "Fill the sheet, save it, then close Excel to continue the import prompt.",
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Template Error", str(e))
+
+    def import_bulk_issues(self):
+        if self._bulk_import_waiting:
+            return
+        self._bulk_import_path = _bulk_import_template_path()
+        try:
+            if os.path.exists(self._bulk_import_path):
+                try:
+                    os.remove(self._bulk_import_path)
+                except Exception:
+                    pass
+            create_bulk_import_template(self._bulk_import_path)
+            try:
+                os.startfile(self._bulk_import_path)
+            except Exception as e:
+                QMessageBox.critical(self, "Bulk Import Error", f"Could not open the template file.\n\n{e}")
+                self._bulk_import_path = None
+                return
+            self._bulk_import_waiting = True
+            QTimer.singleShot(1500, self._poll_bulk_import_template)
+        except Exception as e:
+            QMessageBox.critical(self, "Bulk Import Error", str(e))
+            self._bulk_import_path = None
+            self._bulk_import_waiting = False
+
+    def _poll_bulk_import_template(self):
+        path = self._bulk_import_path
+        if not path:
+            self._bulk_import_waiting = False
+            return
+        if not os.path.exists(path):
+            self._bulk_import_waiting = False
+            self._bulk_import_path = None
+            return
+        try:
+            with open(path, "r+b"):
+                pass
+        except Exception:
+            QTimer.singleShot(1500, self._poll_bulk_import_template)
+            return
+
+        self._bulk_import_waiting = False
+        reply = QMessageBox.question(
+            self,
+            "Import Bulk Issues",
+            "The Excel file is closed.\n\nDo you want to import the rows now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self._bulk_import_path = None
+            return
+
+        try:
+            imported, skipped = import_bulk_issues(path, default_tracker_type=self.current_tracker_type())
+            self.refresh_all_tabs()
+            message = f"Imported {imported} issue{'s' if imported != 1 else ''}."
+            if skipped:
+                preview = "\n".join(skipped[:8])
+                if len(skipped) > 8:
+                    preview += f"\n... and {len(skipped) - 8} more skipped row(s)."
+                message += f"\n\nSkipped {len(skipped)} row(s):\n{preview}"
+                QMessageBox.warning(self, "Bulk Import Completed", message)
+            else:
+                QMessageBox.information(self, "Bulk Import Completed", message)
+        except Exception as e:
+            QMessageBox.critical(self, "Bulk Import Error", str(e))
+        finally:
+            self._bulk_import_path = None
 
 
 def main():
