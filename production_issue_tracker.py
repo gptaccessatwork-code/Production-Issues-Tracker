@@ -1007,7 +1007,8 @@ def _mk_button(text, on_click, outline=False, danger=False, width=None, color=No
     btn.setProperty("outline", outline)
     btn.setProperty("danger", danger)
     if width:
-        btn.setFixedWidth(width)
+        btn.setMinimumWidth(width)
+    btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     if color and not outline and not danger:
         btn.setStyleSheet(f"background: {color}; color: {text_color or 'white'};")
     if on_click:
@@ -1018,8 +1019,8 @@ def _mk_button(text, on_click, outline=False, danger=False, width=None, color=No
 
 
 def _set_field_width(widget, width=520):
-    widget.setMinimumWidth(width)
-    widget.setMaximumWidth(width)
+    widget.setMinimumWidth(max(140, int(width * 0.33)))
+    widget.setSizePolicy(QSizePolicy.Policy.Expanding, widget.sizePolicy().verticalPolicy())
     return widget
 
 
@@ -1060,6 +1061,7 @@ def _draw_icon(kind, color):
 def _card(title=None):
     frame = QFrame()
     frame.setObjectName("Card")
+    frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
     frame.setStyleSheet(
         f"""
         QFrame#Card {{
@@ -1097,6 +1099,7 @@ class FilterDropdown(QFrame):
     def __init__(self, items, parent=None):
         super().__init__(parent)
         self.setObjectName("FilterDropdown")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._build(items)
 
     def _build(self, items):
@@ -1153,6 +1156,7 @@ class FilterDropdown(QFrame):
 def _metric_card(title, value="", accent=None):
     card = ClickableCard()
     card.setObjectName("MetricCard")
+    card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
     card.setStyleSheet(
         f"""
         QFrame#MetricCard {{
@@ -1323,8 +1327,10 @@ class CalendarDialog(QDialog):
             btn.setIconSize(QSize(14, 14))
             btn.setFixedSize(30, 30)
 
-        self.month_combo.setFixedWidth(120)
-        self.year_combo.setFixedWidth(92)
+        self.month_combo.setMinimumWidth(120)
+        self.year_combo.setMinimumWidth(92)
+        self.month_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.year_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.month_combo.setCursor(Qt.PointingHandCursor)
         self.year_combo.setCursor(Qt.PointingHandCursor)
 
@@ -1521,7 +1527,8 @@ class CopyPasteDialog(QDialog):
             tb = QPlainTextEdit(self)
             tb.setPlainText(content)
             tb.setReadOnly(True)
-            tb.setFixedHeight(h)
+            tb.setMinimumHeight(h)
+            tb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             tb.setStyleSheet(
                 f"""
                 QPlainTextEdit {{
@@ -1555,8 +1562,8 @@ class NewIssueDialog(QDialog):
         super().__init__(parent)
         self.tracker_type = tracker_type
         self.setWindowTitle(f"Log New {tracker_type} Issue")
-        self.resize(680, 575)
-        self.setMinimumWidth(720)
+        self.resize(620, 575)
+        self.setMinimumWidth(560)
         self.setModal(True)
         self._build()
 
@@ -1588,16 +1595,16 @@ class NewIssueDialog(QDialog):
         sys_box.setContentsMargins(0, 0, 0, 0)
         sys_box.setSpacing(4)
         self.sys = QPlainTextEdit(self)
-        self.sys.setFixedHeight(60)
+        self.sys.setMinimumHeight(60)
+        self.sys.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
         _set_field_width(self.sys, field_w)
         sys_box.addWidget(self.sys)
         sys_hint = _mk_label("One system per line for multiple systems.", color=C["subtle"])
         sys_hint.setWordWrap(True)
-        sys_hint.setMaximumWidth(field_w)
         sys_box.addWidget(sys_hint)
         sys_wrap = QWidget()
         sys_wrap.setLayout(sys_box)
-        sys_wrap.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        sys_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         form.addWidget(sys_wrap, r, 1)
 
         r += 1
@@ -1622,16 +1629,16 @@ class NewIssueDialog(QDialog):
         desc_box.setContentsMargins(0, 0, 0, 0)
         desc_box.setSpacing(4)
         self.desc = QPlainTextEdit(self)
-        self.desc.setFixedHeight(130)
+        self.desc.setMinimumHeight(130)
+        self.desc.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         _set_field_width(self.desc, field_w)
         desc_box.addWidget(self.desc)
         desc_hint = _mk_label("Separate multiple issues with a blank line.", color=C["subtle"])
         desc_hint.setWordWrap(True)
-        desc_hint.setMaximumWidth(field_w)
         desc_box.addWidget(desc_hint)
         desc_wrap = QWidget()
         desc_wrap.setLayout(desc_box)
-        desc_wrap.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        desc_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         form.addWidget(desc_wrap, r, 1)
 
         r += 1
@@ -1724,7 +1731,7 @@ class ManageDialog(QDialog):
             bar = QFrame(self)
             bar.setObjectName("HeaderBar")
             bar.setStyleSheet(f"background: {C['header']};")
-            bar.setFixedHeight(24)
+            bar.setMinimumHeight(24)
             bar_row = QHBoxLayout(bar)
             bar_row.setContentsMargins(8, 2, 8, 2)
             bar_row.addWidget(_mk_label(title, bold=True, color="white"))
@@ -1744,16 +1751,17 @@ class ManageDialog(QDialog):
         sys_box.setContentsMargins(0, 0, 0, 0)
         sys_box.setSpacing(4)
         self.sys = QPlainTextEdit(self)
-        self.sys.setFixedHeight(60)
+        self.sys.setMinimumHeight(60)
+        self.sys.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
         _set_field_width(self.sys, field_w)
         self.sys.setPlainText(R["system_number"] or "")
         sys_box.addWidget(self.sys)
         sys_hint = _mk_label("One system per line for multiple systems.", color=C["subtle"])
         sys_hint.setWordWrap(True)
-        sys_hint.setMaximumWidth(field_w)
         sys_box.addWidget(sys_hint)
         sys_wrap = QWidget()
         sys_wrap.setLayout(sys_box)
+        sys_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         form.addWidget(sys_wrap, r, 1)
 
         r += 1
@@ -1778,16 +1786,17 @@ class ManageDialog(QDialog):
         desc_box.setContentsMargins(0, 0, 0, 0)
         desc_box.setSpacing(4)
         self.desc = QPlainTextEdit(self)
-        self.desc.setFixedHeight(100)
+        self.desc.setMinimumHeight(100)
+        self.desc.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         _set_field_width(self.desc, field_w)
         self.desc.setPlainText(R["issue_desc"] or "")
         desc_box.addWidget(self.desc)
         desc_hint = _mk_label("Separate multiple issues with a blank line.", color=C["subtle"])
         desc_hint.setWordWrap(True)
-        desc_hint.setMaximumWidth(field_w)
         desc_box.addWidget(desc_hint)
         desc_wrap = QWidget()
         desc_wrap.setLayout(desc_box)
+        desc_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         form.addWidget(desc_wrap, r, 1)
 
         r += 1
@@ -1869,6 +1878,7 @@ class ManageDialog(QDialog):
             self.closed_rb.setChecked(True)
         status_wrap = QWidget()
         status_wrap.setLayout(status_row)
+        status_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         _set_field_width(status_wrap, field_w)
         form.addWidget(status_wrap, r, 1)
 
@@ -1877,7 +1887,8 @@ class ManageDialog(QDialog):
 
         form.addWidget(_mk_label("Solution"), r, 0, alignment=Qt.AlignTop)
         self.sol = QPlainTextEdit(self)
-        self.sol.setFixedHeight(70)
+        self.sol.setMinimumHeight(70)
+        self.sol.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         _set_field_width(self.sol, field_w)
         self.sol.setPlainText(R["solution"] or "")
         sol_wrap = QWidget()
@@ -1885,6 +1896,7 @@ class ManageDialog(QDialog):
         sol_lay.setContentsMargins(0, 0, 0, 0)
         sol_lay.setSpacing(0)
         sol_lay.addWidget(self.sol)
+        sol_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         form.addWidget(sol_wrap, r, 1)
 
         r += 1
@@ -1910,7 +1922,8 @@ class ManageDialog(QDialog):
         r = section("Remarks", r)
         form.addWidget(_mk_label("Remarks"), r, 0, alignment=Qt.AlignTop)
         self.rmk = QPlainTextEdit(self)
-        self.rmk.setFixedHeight(70)
+        self.rmk.setMinimumHeight(70)
+        self.rmk.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         _set_field_width(self.rmk, field_w)
         self.rmk.setPlainText(R["remarks"] or "")
         rem_wrap = QWidget()
@@ -1918,13 +1931,14 @@ class ManageDialog(QDialog):
         rem_lay.setContentsMargins(0, 0, 0, 0)
         rem_lay.setSpacing(0)
         rem_lay.addWidget(self.rmk)
+        rem_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         form.addWidget(rem_wrap, r, 1)
 
         lay.addStretch(1)
 
         footer = QFrame(self)
         footer.setStyleSheet(f"background: {C['panel']};")
-        footer.setFixedHeight(56)
+        footer.setMinimumHeight(56)
         footer_row = QHBoxLayout(footer)
         footer_row.setContentsMargins(14, 10, 14, 10)
         footer_row.addWidget(_mk_button("Delete", self._delete, danger=True, width=100))
@@ -2004,6 +2018,7 @@ class IssueTableWidget(QTableWidget):
         self.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.horizontalHeader().setSectionsClickable(True)
         self.horizontalHeader().setSortIndicatorShown(True)
+        self.horizontalHeader().setMinimumSectionSize(48)
         self.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.horizontalHeader().sectionResized.connect(lambda *_: QTimer.singleShot(0, self.adjust_row_heights))
         self.itemClicked.connect(self._copy_item_text)
@@ -2035,11 +2050,10 @@ class IssueTableWidget(QTableWidget):
 
     def configure_columns(self):
         self.setColumnWidth(0, 40)
-        for idx, (_, _, width, _) in enumerate(self._columns, start=1):
-            self.setColumnWidth(idx, width)
         self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        for idx in range(1, self.columnCount()):
+        for idx, (_, _, width, _) in enumerate(self._columns, start=1):
             self.horizontalHeader().setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
+            self.setColumnWidth(idx, width)
 
     def clear_table(self):
         self.setSortingEnabled(False)
@@ -2532,7 +2546,7 @@ class TrendShowcaseDialog(QDialog):
 
     def _combo(self, items):
         combo = FilterDropdown(items, self)
-        combo.setMinimumWidth(150)
+        combo.setMinimumWidth(130)
         return combo
 
     def _wire(self, row, label, combo, col):
@@ -2619,9 +2633,10 @@ class TabContentFrame(QWidget):
 
         self.search = QLineEdit(self)
         self.search.setPlaceholderText("Search every visible field...")
-        self.search.setMinimumWidth(250)
+        self.search.setMinimumWidth(180)
+        self.search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.search.textChanged.connect(self.search_apply)
-        hero_row.addWidget(self.search, 0, Qt.AlignVCenter)
+        hero_row.addWidget(self.search, 1, Qt.AlignVCenter)
 
         self.search_match_lbl = _mk_label("", color=C["subtle"])
         hero_row.addWidget(self.search_match_lbl, 0, Qt.AlignVCenter)
@@ -2667,7 +2682,8 @@ class TabContentFrame(QWidget):
 
         reset_btn = _mk_button("Reset Filters", self.reset_filters, outline=True, width=132)
         filters_row.addWidget(reset_btn, 0, 10, 1, 1)
-        filters_row.setColumnStretch(11, 1)
+        for col in (1, 3, 5, 7, 9, 11):
+            filters_row.setColumnStretch(col, 1)
         lay.addWidget(filters_card)
 
         table_card = _card()
@@ -2685,7 +2701,8 @@ class TabContentFrame(QWidget):
     def _mk_combo(self, items):
         field = FilterDropdown(items, self)
         field.currentTextChanged.connect(self._refresh)
-        field.setMinimumWidth(110)
+        field.setMinimumWidth(96)
+        field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         return field
 
     def _wire_filter(self, row, label, combo, col):
@@ -2825,7 +2842,8 @@ class ExportScopeDialog(QDialog):
         super().__init__(parent)
         self.result = None
         self.setWindowTitle("Select Export Scope")
-        self.setFixedSize(450, 320)
+        self.resize(450, 320)
+        self.setMinimumSize(400, 280)
         self.setModal(True)
         self._build()
 
@@ -2915,7 +2933,7 @@ class AppWindow(QMainWindow):
         self._bulk_import_waiting = False
         self.setWindowTitle(WIN_TITLE)
         self.resize(*WIN_SIZE)
-        self.setMinimumSize(*WIN_MIN)
+        self.setMinimumSize(860, 560)
         self.setStyleSheet(_stylesheet())
         self._build()
         self.refresh_all_tabs()
@@ -2928,8 +2946,15 @@ class AppWindow(QMainWindow):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(14)
 
+        sidebar_scroll = SmoothScrollArea(self)
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QFrame.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sidebar_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        sidebar_scroll.setMinimumWidth(240)
+
         sidebar = _card()
-        sidebar.setFixedWidth(330)
+        sidebar.setMinimumWidth(240)
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(18, 18, 18, 18)
         side.setSpacing(14)
@@ -2971,11 +2996,11 @@ class AppWindow(QMainWindow):
 
         action_card = _card("Quick Actions")
         action_lay = action_card.layout()
-        self.quick_new_btn = _mk_button("New Issue", self._quick_new_issue, width=240)
-        self.quick_trend_btn = _mk_button("Trend Showcase", self.show_trend_showcase, outline=True, width=240)
-        self.quick_bulk_import_btn = _mk_button("Bulk Import", self.import_bulk_issues, outline=True, width=240)
-        self.quick_refresh_btn = _mk_button("Refresh All", self.refresh_all_tabs, outline=True, width=240)
-        self.quick_export_btn = _mk_button("Export Excel", self.export_data, outline=True, width=240)
+        self.quick_new_btn = _mk_button("New Issue", self._quick_new_issue)
+        self.quick_trend_btn = _mk_button("Trend Showcase", self.show_trend_showcase, outline=True)
+        self.quick_bulk_import_btn = _mk_button("Bulk Import", self.import_bulk_issues, outline=True)
+        self.quick_refresh_btn = _mk_button("Refresh All", self.refresh_all_tabs, outline=True)
+        self.quick_export_btn = _mk_button("Export Excel", self.export_data, outline=True)
         action_lay.addWidget(self.quick_new_btn)
         action_lay.addWidget(self.quick_trend_btn)
         action_lay.addWidget(self.quick_bulk_import_btn)
@@ -3004,14 +3029,15 @@ class AppWindow(QMainWindow):
         side.addWidget(note_card)
         side.addStretch(1)
         side.addWidget(_mk_label("AMAT Production Issue Tracker", color=C["subtle"]))
-        side.addWidget(_mk_label("Made by Sankar | v4", color=C["subtle"]))
+        side.addWidget(_mk_label("Made by Sankar | v4.1", color=C["subtle"]))
+        sidebar_scroll.setWidget(sidebar)
 
         main = QVBoxLayout()
         main.setSpacing(16)
 
         header = QFrame(self)
         header.setObjectName("HeaderBar")
-        header.setFixedHeight(88)
+        header.setMinimumHeight(88)
         header.setStyleSheet(
             f"""
             QFrame#HeaderBar {{
@@ -3057,12 +3083,15 @@ class AppWindow(QMainWindow):
                 self.new_issue,
                 self.delete_issue_by_id,
             )
-            page_lay.addWidget(frame)
+            page_lay.addWidget(frame, 1)
             self.tabs.addTab(page, tab_name)
             self._tab_frames[tracker_type] = frame
 
-        root.addWidget(sidebar)
-        root.addLayout(main, 1)
+        root.addWidget(sidebar_scroll)
+        main_wrapper = QWidget(self)
+        main_wrapper.setLayout(main)
+        main_wrapper.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        root.addWidget(main_wrapper, 1)
 
     def current_tracker_type(self):
         return "Engineering" if self.tabs.currentIndex() == 0 else "Material"
